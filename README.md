@@ -141,7 +141,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\run-local.ps1
 └── migration-snapshot/        所有者确认公开的静态配置与数据库快照
 ```
 
-`migration-snapshot` 含实际目录、下载记录和队列，不包含视频。快照配置包含原电脑内网代理地址，使用前应修改；该快照不会随本机运行自动更新。恢复方法见 [快照说明](migration-snapshot/README.md)。
+`migration-snapshot` 含实际目录、下载记录和队列，不包含视频。快照配置的代理指向本机回环地址，使用前应检查代理端口与开关；该快照不会随本机运行自动更新。恢复方法见 [快照说明](migration-snapshot/README.md)。
 
 主要配置字段：
 
