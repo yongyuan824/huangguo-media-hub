@@ -1,316 +1,260 @@
 # huangguo-media-hub
 
-基于 [HGXZ](https://github.com/jzf387897543/HGXZ) 扩展的本地媒体管理工具，保留上游提交历史。
+基于 [HGXZ](https://github.com/jzf387897543/HGXZ) 扩展的媒体下载与本地管理工具。当前版本主要面向 Windows 本地使用，提供 Web 管理页面、人工下载队列、本地播放、网络诊断和便携迁移工具，保留上游提交历史。
 
-## 当前版本
+## 快速了解
 
-- 手动专辑下载队列、排序、暂停与停止、进度持久化和缺失文件手动补下载。
-- 专辑栏目、标签、专题与排行榜筛选，评分、收藏、隐藏和新增剧集提示。
-- 本地按专辑播放、剧集选择、播放进度记录及可选自动下一集。
-- 代理开关、请求方式显示、站点连接和视频线路抽样测试。
-- Windows 托盘启动与停止，以及便携包构建和迁移工具。
+- **发现内容**：从已启用的在线栏目刷新专辑目录，保存到本地；发现专题、排行榜和标签，按需刷新对应列表。
+- **人工选择下载**：专辑单独或批量加入队列，支持优先同步、置顶、移除、暂停后续任务和停止当前任务。
+- **查看状态**：按待同步、已完成、失败、有更新、文件缺失等条件筛选，查看专辑及当前剧集的下载进度。
+- **管理专辑**：封面、栏目、标签、站点评分和站点标识；支持搜索、评分/更新时间/名称排序、收藏与不感兴趣。
+- **本地播放**：按专辑归类已存在的视频，选择剧集，保存播放位置，并可勾选自动播放下一集。
+- **迁移和补下载**：保留下载记录，标记缺失文件，由操作人单集或批量选择补下载。
+- **网络配置**：代理开关、代理地址、请求方式显示、主站和备用地址、连接测试及视频线路抽样测试。
+- **Windows 托盘**：启动/停止服务、打开网页和下载目录、停止并退出。
 
-网页关闭不会停止后台任务。在线预览目前打开原站页面。视频线路测试只读取少量数据，不保存整集。
+在线预览目前打开原站专辑页面；本地播放器播放已下载且实际存在的文件。评分、标签和标识取决于站点提供的数据，可能为空。
 
-## Windows 源码运行
+## 1. Windows 启动
 
-需要 Python 3.12、FFmpeg（含 ffprobe）和 OpenSSL，可执行文件放入 `.local` 或 PATH。
+### 已有便携版
+
+1. 将便携包解压到可写目录，保留完整目录结构。
+2. 双击 `启动HGXZ.vbs`，程序进入系统托盘。
+3. 双击托盘图标，或打开 [本地管理页面](http://127.0.0.1:8099/)。
+4. 首次使用先到“运行参数”检查站点、栏目和代理，并执行连接测试。
+5. 刷新专辑目录，选择需要的专辑加入队列。
+
+关闭网页不会停止服务或下载。需要关闭程序时，使用托盘“停止服务”或“停止并退出”。不要同时启动源码版和便携版，两者默认都使用 8099 端口。
+
+本仓库没有附带便携 ZIP、Python 运行时、FFmpeg 或已下载视频；克隆源码不等于取得可直接运行的便携版。
+
+### 从源码运行
+
+准备 Windows 10/11 x64、Python 3.12、FFmpeg、ffprobe 和 OpenSSL。外部工具可放入程序目录的 `.local` 文件夹，或加入 PATH。
 
 ```powershell
+git clone https://github.com/yongyuan824/huangguo-media-hub.git
+Set-Location huangguo-media-hub
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 Copy-Item config.example.json config.json
 ```
 
-编辑 `config.json`，将 `download.root`、`state.database`、`log.directory` 分别改为 `./media`、`./data/state.sqlite3`、`./logs`，按需配置站点与代理。
-
-执行 `run-local.ps1`，或双击 `启动HGXZ.vbs` 使用托盘。浏览器打开 http://127.0.0.1:8099/ 。
-
-本仓库不包含本机配置、下载视频、状态数据库、运行时或便携包。`portable-tools/build.py` 用于已有 Windows 构建环境，依赖 `.local` 中的工具和本机数据；它不是全自动安装脚本。迁移时请另行保留数据库及所需媒体文件。
-
-以下是上游部署说明，其中旧镜像地址指向上游发布版本；本仓库工作流构建的镜像为 `ghcr.io/yongyuan824/huangguo-media-hub:latest`，是否可拉取取决于构建结果及包可见性设置。
-
----
-
-# 🍊 HGXZ - 黄果下载
-
-自动下载黄果短剧视频到指定目录，带 WebUI 管理界面。
-
-支持增量同步、失败重试、已有视频扫描识别，SQLite 记录下载状态。生成 Emby / Jellyfin 兼容的目录结构与 NFO 元数据。
-
----
-
-## 功能特点
-
-- **自动发现与下载** — 遍历分类页面，自动发现新专辑并下载全部剧集
-- **HLS 逐段下载** — 独立短连接分段下载+自动重试，避免 CDN 长连接断流；支持 AES-128 流解密
-- **增量同步** — 已下载完成的自动跳过，失败集进入冷却期后定时重试
-- **Emby 兼容** — 自动创建 `tvshow.nfo`、`episodedetails.nfo` 和 `poster.jpg`，智能跳过无变化重写
-- **多域名故障切换** — 主站异常时自动无缝切换备用域名，恢复后自动切回
-- **WebUI 管理** — 仪表盘统计、分类进度、专辑列表（含封面）、剧集明细、实时日志（WebSocket 流式推送）、运行参数查看
-- **Unraid 专属支持** — 提供现成的 Unraid Docker 图形化安装模板
-
----
-
-## 目录与路径规划
-
-| 用途 | 容器内路径 | Unraid 宿主机路径 | 说明 |
-|------|------------|-------------------|------|
-| **配置文件** | `/config` | `/mnt/user/appdata/HGXZ/config` | 存放 `config.json` |
-| **状态库** | `/data` | `/mnt/user/appdata/HGXZ/data` | 存放 SQLite 状态数据库 `state.sqlite3` |
-| **运行日志** | `/logs` | `/mnt/user/appdata/HGXZ/logs` | 存放每日轮转日志 `hgxz.log` |
-| **视频媒体库** | `/media` | `/mnt/user/QTZL/黄果` | 下载好的短剧视频与 NFO 元数据 |
-
----
-
-## 一、Docker 镜像信息
-
-- **镜像地址**：`ghcr.io/wx2cyj/hgxz:latest`
-- **平台架构**：`linux/amd64`
-- **镜像可见性**：**公开（public）**，无需登录即可直接拉取：
-
-  ```bash
-  docker pull ghcr.io/wx2cyj/hgxz:latest
-  ```
-
----
-
-## 二、Unraid 图形化配置部署指南
-
-### 第一步：准备配置文件目录
-
-在 Unraid 终端中执行以下命令，快速创建目录并将模板配置文件就位：
-
-```bash
-mkdir -p /mnt/user/appdata/HGXZ/config /mnt/user/appdata/HGXZ/data /mnt/user/appdata/HGXZ/logs /mnt/user/QTZL/黄果
-```
-
-将项目中的 `config.example.json` 复制到 `/mnt/user/appdata/HGXZ/config/config.json`：
-
-```bash
-curl -sSL https://raw.githubusercontent.com/wx2cyj/HGXZ/main/config.example.json -o /mnt/user/appdata/HGXZ/config/config.json
-```
-
-> 也可以通过 SMB 共享或 Unraid 文件管理器直接在 `/mnt/user/appdata/HGXZ/config/` 下创建并编辑 `config.json`。
-
----
-
-### 第二步：添加 Unraid 容器模板
-
-1. 在 Unraid 终端中，将本项目的模板文件下载到 Unraid 用户模板目录：
-   ```bash
-   curl -sSL https://raw.githubusercontent.com/wx2cyj/HGXZ/main/unraid/hgxz.xml -o /boot/config/plugins/dockerMan/templates-user/my-hgxz.xml
-   ```
-2. 进入 Unraid 网页端 **【Docker】** → 点击底部的 **【添加容器】（Add Container）**。
-3. 在 **【模板】（Template）** 下拉菜单中选择 **`HGXZ`**（系统会自动填充所有配置项）。
-4. 确认各项参数设置无误：
-
-| 设置项 | 字段名 | 填写内容 | 说明 |
-|--------|--------|----------|------|
-| **名称** | Name | `HGXZ` | 容器名称 |
-| **存储库** | Repository | `ghcr.io/wx2cyj/hgxz:latest` | 镜像地址（公开，无需登录） |
-| **WebUI 端口** | Port: 8099 | `8099` | Web 界面访问端口，可按需修改 |
-| **配置文件目录** | Path: /config | `/mnt/user/appdata/HGXZ/config` | 存放 config.json |
-| **状态库目录** | Path: /data | `/mnt/user/appdata/HGXZ/data` | SQLite 数据库文件 |
-| **日志目录** | Path: /logs | `/mnt/user/appdata/HGXZ/logs` | 运行日志 |
-| **媒体目录** | Path: /media | `/mnt/user/QTZL/黄果` | 视频下载保存目录 |
-| **时区** | Variable: TZ | `Asia/Shanghai` | 确保定时时间准确 |
-| **每日同步时间** | Variable: SCHEDULE | `03:30` | 每天自动同步时间（HH:MM 格式，默认凌晨 03:30） |
-| **文件权限掩码** | Variable: UMASK | `000` | 赋予生成文件完全读写权限，避免 Unraid SMB 权限问题 |
-| **运行参数** | Post Arguments | `--daemon` | 常驻后台运行 |
-
-> 🌐 **关于网络代理配置（必读）：**
-> 国内网络环境下 `huangguoai.com` 受限，**必须通过代理访问**，点击界面下方的 **【显示更多设置...】（Show more settings...）**：
-> - `HTTP_PROXY` / `HTTPS_PROXY`：填入你的局域网 HTTP 代理地址（例如 `http://192.168.2.6:10086`，注意填真实局域网 IP，不可填 `127.0.0.1`）。
-> - `NO_PROXY`：保持默认的 `127.0.0.1,localhost`。**切勿**将 `huangguoai.com` 加入直连白名单，否则会导致主站超时报错。
-
-5. 确认无误后，点击最下方的 **【应用】（Apply）** 按钮。Unraid 将自动拉取镜像并启动容器。
-
----
-
-### 第三步：访问与验证
-
-1. 启动完成后，在 **【Docker】** 页面找到 `HGXZ` 容器，点击图标选择 **【查看日志】（Logs）**，确认看到 WebUI 启动日志。
-2. 点击容器图标选择 **【WebUI】**，或直接在浏览器访问：
-   ```
-   http://[你的Unraid主机IP]:8099
-   ```
-3. 进入界面后即可查看仪表盘、专辑列表与实时同步日志。
-
----
-
-## 三、Docker CLI 命令行运行（备用）
-
-如果不使用 Unraid 模板，也可以直接在终端运行以下命令：
-
-```bash
-docker run -d --name HGXZ \
-  --restart unless-stopped \
-  -p 8099:8099 \
-  -v /mnt/user/appdata/HGXZ/config:/config \
-  -v /mnt/user/appdata/HGXZ/data:/data \
-  -v /mnt/user/appdata/HGXZ/logs:/logs \
-  -v /mnt/user/QTZL/黄果:/media \
-  -e TZ=Asia/Shanghai \
-  -e SCHEDULE=03:30 \
-  -e UMASK=000 \
-  -e HTTP_PROXY=http://192.168.2.6:10086 \
-  -e HTTPS_PROXY=http://192.168.2.6:10086 \
-  -e NO_PROXY=127.0.0.1,localhost \
-  ghcr.io/wx2cyj/hgxz:latest
-```
-
----
-
-## 四、WebUI 界面说明
-
-| 页面 | 内容 |
-|------|------|
-| **仪表盘** | 专辑总数/总集数、已下载集数与占用容量、完整专辑数、失败集数；分类进度条；最近完成的专辑 |
-| **专辑列表** | 封面缩略图、标题、分类、完成度进度条（绿色完成 / 红色失败）、状态标签；支持按分类/状态筛选与关键字搜索 |
-| **剧集明细** | 点击专辑进入：封面大图、已下载容量、最近下载时间、待下载与失败集数、存储路径；逐集状态列表；单独同步 / 重置失败按钮 |
-| **同步日志** | WebSocket 实时推送，支持按级别与关键字过滤、自动滚动开关、清屏 |
-| **运行参数** | 只读展示当前生效的配置（主站、备用域名、媒体目录、重试次数、超时等） |
-
-顶部按钮：
-
-- **🔄 立即同步** — 全量遍历所有分类并下载新增剧集
-- **📂 扫描已有** — 扫描媒体目录，把已存在的视频注册进状态库（不会重复下载）
-
-> 同步进行中时按钮自动禁用，定时任务与手动同步互斥，不会并发下载同一集。
-
----
-
-## 五、命令行用法（容器内 / 本地）
-
-daemon 模式由 `--daemon` 显式开启，其余子命令直接运行：
-
-```bash
-# 常驻模式（Docker 默认）：立即同步一次，之后每天定时同步，同时开启 WebUI
-python -m HGXZ.cli --config /config/config.json --daemon
-
-# 单次同步
-python -m HGXZ.cli --config /config/config.json
-
-# 只同步指定专辑（忽略冷却期，强制重试）
-python -m HGXZ.cli --config /config/config.json --only-id 12345
-
-# 只写元数据（NFO/封面），不下载视频
-python -m HGXZ.cli --config /config/config.json --metadata-only
-
-# 扫描媒体目录，把已有视频注册进状态库
-python -m HGXZ.cli --config /config/config.json --scan-existing
-
-# 重建缺失或损坏的封面
-python -m HGXZ.cli --config /config/config.json --rebuild-covers
-
-# 限制范围，便于调试
-python -m HGXZ.cli --config /config/config.json --max-albums 3 --max-episodes 2
-```
-
-在已运行的容器内执行子命令（镜像是常驻模式，需要覆盖入口参数）：
-
-```bash
-docker exec HGXZ python -m HGXZ.cli --config /config/config.json --scan-existing
-```
-
----
-
-## 六、配置文件详细说明
-
-配置文件路径：`/mnt/user/appdata/HGXZ/config/config.json`（完整模板见仓库根目录 `config.example.json`）
+编辑 `config.json`，将以下路径改成适合 Windows 本地运行的相对路径：
 
 ```json
 {
-  "site": {
-    "base_url": "https://huangguoai.com",
-    "backup_urls": [
-      "https://l5f9m.rxzfszht.cc",
-      "https://blolhh.rxzfszht.cc",
-      "https://mxz58.rxzfszht.cc",
-      "https://owfv.rxzfszht.cc",
-      "https://zd43td.rxzfszht.cc",
-      "https://qp0h.rxzfszht.cc",
-      "https://olci.rxzfszht.cc",
-      "https://j5rs.rxzfszht.cc",
-      "https://lhsb.rxzfszht.cc"
-    ],
-    "request_interval": 2,
-    "timeout": 30,
-    "categories": [
-      { "name": "AI成人短剧", "path": "/ai-duanju/", "library": "AI成人短剧" },
-      { "name": "AI成人漫剧", "path": "/ai-manju/", "library": "AI成人漫剧" }
-    ]
-  },
-  "download": {
-    "root": "/media",
-    "retries": 3,
-    "minimum_duration": 3,
-    "recheck_days": 7,
-    "failure_cooldown_hours": 24,
-    "episode_timeout": 1800
-  },
-  "state": { "database": "/data/state.sqlite3" },
-  "log": { "directory": "/logs" }
+  "download": { "root": "./media" },
+  "state": { "database": "./data/state.sqlite3" },
+  "log": { "directory": "./logs" }
 }
 ```
 
-| 参数项 | 说明 | 默认推荐值 |
-|--------|------|------------|
-| `site.base_url` | 主站根域名 | `https://huangguoai.com` |
-| `site.backup_urls` | 备用域名列表，主站故障时自动切换（建议保留全部 9 个） | 见模板 |
-| `site.request_interval` | 请求间隔延迟（秒），防止被站点风控 | `2` |
-| `site.timeout` | 单次请求超时（秒） | `30` |
-| `site.categories` | 抓取的短剧分类与对应生成的 Emby 媒体库目录名 | — |
-| `download.root` | 视频下载根目录（对应容器内 `/media`） | `/media` |
-| `download.retries` | 单集重试次数 | `3` |
-| `download.minimum_duration` | 视频最短有效时长（秒），过滤无效视频（建议 3 秒以兼容短花絮） | `3` |
-| `download.recheck_days` | 已完结专辑再次核查的间隔天数 | `7` |
-| `download.failure_cooldown_hours` | 失败集的冷却等待时间（小时），避免重复无效请求 | `24` |
-| `download.episode_timeout` | 单集下载总超时时间（秒） | `1800` |
-| `state.database` | SQLite 数据库文件路径 | `/data/state.sqlite3` |
-| `log.directory` | 日志存放路径（对应容器内 `/logs`） | `/logs` |
+这只是需要修改的字段示例，请保留模板中的其他设置，不能用此片段替换完整配置。
 
----
+前台启动：
 
-## 七、Emby / Jellyfin 刮削结构
-
-下载完成后的媒体库结构直接兼容 Emby 和 Jellyfin，无需额外刮削插件：
-
-```
-/mnt/user/QTZL/黄果/
-├── AI成人短剧/
-│   ├── 剧名A [huangguo-12345]/
-│   │   ├── tvshow.nfo           # 剧集元数据（标题/分类/标签/完结状态）
-│   │   ├── poster.jpg           # 剧集封面（自动解密）
-│   │   └── Season 01/
-│   │       ├── 剧名A.S01E01.mp4 # 视频文件
-│   │       ├── 剧名A.S01E01.nfo # 单集元数据
-│   │       ├── 剧名A.S01E02.mp4
-│   │       └── 剧名A.S01E02.nfo
-│   └── ...
-└── AI成人漫剧/
-    └── ...
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\run-local.ps1
 ```
 
-在 Emby 中将 `/mnt/user/QTZL/黄果` 添加为**节目（电视节目）**类型的媒体库即可直接识别展示。
+或双击根目录的 `启动HGXZ.vbs` 使用托盘。启动器通过 `.local/webui.py` 运行 Web 服务，默认只监听 `127.0.0.1:8099`。普通启动不运行每日全站同步调度器；持久化队列会按其保存状态处理，恢复前应检查队列。
 
-> 目录名使用 `[huangguo-专辑ID]` 后缀作为唯一标识。站点改标题时程序会沿用状态库中记录的目录，不会产生重复目录。
+## 2. 页面与日常操作
 
----
+| 页面/入口 | 用途 |
+| --- | --- |
+| 仪表盘 | 查看专辑、剧集、容量及任务概况 |
+| 专辑列表 | 搜索、分类/状态/收藏筛选、排序、查看详情、预览原站、加入队列 |
+| 同步队列 | 区分当前下载和等待任务，置顶、移除、暂停或继续 |
+| 本地播放 | 按专辑浏览实际存在的视频并选集播放 |
+| 同步日志 | 查看请求、扫描及下载失败等运行信息 |
+| 运行参数 | 站点与备用地址、栏目发现和配置、代理开关、网络测试、并发和空间信息 |
+| 刷新专辑目录 | 在线更新目录及可核对的剧集信息，保存到数据库 |
+| 扫描已有 | 扫描本地媒体并联网核对总集数，不启动视频下载 |
 
-## 八、常见问题
+建议先测试连接，再刷新目录、预览专辑，最后选择需要的内容加入队列。刷新和扫描不会把全部专辑自动加入下载队列，也不会因为扫描发现文件缺失而自动补下载；它们不清空已有队列。
 
-| 现象 | 原因与处理 |
-|------|-----------|
-| 容器启动后立即退出并报 JSON 解析错误 | `config.json` 内容不合法或为空文件。检查文件是否为合法 JSON |
-| 日志出现 `SSL: WRONG_VERSION_NUMBER` 或 `HTTP 404` | DNS 污染。确认 `HTTP_PROXY`/`HTTPS_PROXY` 已设置为局域网代理，且 `NO_PROXY` **不要**包含 `huangguoai.com` |
-| 日志出现 `HTTP 403 Forbidden` | 缺少浏览器 UA 或站点风控。程序已内置浏览器 UA，若持续出现请降低 `request_interval` 之外的并发（程序本身为单线程顺序请求） |
-| 某集一直失败 | 剧集可能已下架，失败会进入 24 小时冷却。可在 WebUI 点「重置失败」立即重试 |
-| 界面看不到封面 | 站点封面接口异常时会自动回退到 og:image；若两者都失败，日志中会有 `cover via ... failed` 记录 |
+专题、排行榜和标签是专辑的关联列表，同一专辑以站点 ID 去重，不会因为属于多个列表而重复创建专辑。只有刷新过的列表才有相应本地快照。
 
----
+### 队列和停止规则
 
-## 许可证
+- 队列按专辑顺序处理，同一时间执行一个下载任务；数量由人工加入的专辑决定，没有固定“每批两部”的限制。
+- 优先同步/置顶会调整等待顺序，不抢占当前正在处理的专辑。
+- “暂停后续任务”让当前任务继续，后续任务等待；“停止当前任务”请求取消正在执行的工作，并暂停队列。
+- 停止下载不会删除已经完成的视频。已校验的分段可用于后续续传；如果播放地址或内容发生变化，程序会核对缓存，必要时重新获取。
+- 空间低于保留阈值会中止当前下载并暂停队列，需要清理空间后人工继续。
+- 下载失败请查看日志和剧集状态，处理网络或源站问题后重新加入队列。停止、失败与下载完成是不同状态。
 
-仅供个人学习与自用。
+### 目录更新和总集数
+
+专辑目录保存在本地数据库，不会随着网站变化实时更新。要看到在线新增专辑或剧集，需要手动刷新目录，或在处理专辑时重新核对详情。
+
+总集数尽量采用在线专辑详情。仅从本地文件扫描出来的集数可能只代表已存在的部分，不能据此判断在线全集。在线核对失败时保留原有信息，并在任务结果或日志中显示失败。
+
+已知专辑在线增加剧集时，界面可显示更新提示；确认下载仍需将专辑加入队列。
+
+### 已下载记录与文件缺失
+
+- 已完成记录与实际文件是否存在分别统计。
+- 有完成记录但文件不存在时显示“文件缺失”；普通同步默认跳过这类历史完成记录。
+- 需要恢复时，在专辑详情选择“补下载本集”，或勾选缺失集批量补下载。
+- 合并其他电脑的媒体文件后执行“扫描已有”，才会把识别到的文件纳入本地记录。复制文件本身不会自动合并两个数据库。
+
+## 3. 代理与网络测试
+
+在“运行参数”中填写 HTTP/HTTPS 代理地址，操作开关并保存。代理、站点及栏目配置保存要求当前任务已停止。
+
+```json
+"network": {
+  "enabled": false,
+  "proxy": "http://127.0.0.1:30808"
+}
+```
+
+地址只是格式示例，应使用代理工具实际提供的 HTTP 或 mixed 监听端口。
+
+- **程序代理已停用**：程序请求忽略系统和环境代理；本机工具的 TUN 模式仍可能接管流量。
+- **程序代理已启用**：有配置地址时使用该地址；没有显式地址时可能沿用系统/环境代理，仍需看当前请求方式。
+- **当前主站请求方式**：表示程序对当前主站选择的直连或代理方式，不等于抓包确认了最终公网出口。
+- **检测到的 HTTPS 代理**：只是检测信息；关闭开关时会注明“已忽略，不生效”。
+
+“测试连接”检查代理端口和站点响应。“测试视频线路”从数据库中已核对的专辑选择样本，检查播放接口、清单、所需密钥及少量视频数据，不保存整集，也不写入下载记录。抽样通过不能保证整集下载完成或所有视频都能解码播放。
+
+是否需要代理取决于本机对主站及视频 CDN 的连通性，可以分别在直连和启用代理后测试。
+
+## 4. 文件、配置与数据
+
+```text
+程序目录/
+├── HGXZ/                      程序源码及 Web 页面
+├── .local/webui.py            Windows 本地 Web 入口
+├── config.json                当前运行配置（默认不跟踪）
+├── data/state.sqlite3         当前运行数据库（默认不跟踪）
+├── media/                     视频、封面和 NFO
+├── logs/                      运行日志
+├── run-local.ps1              前台运行入口
+├── 启动HGXZ.vbs               托盘启动入口
+├── tray.ps1 / hgxz.ico         托盘管理和图标
+├── portable-tools/            便携版构建及路径迁移工具
+└── migration-snapshot/        所有者确认公开的静态配置与数据库快照
+```
+
+`migration-snapshot` 含实际目录、下载记录和队列，不包含视频。快照配置包含原电脑内网代理地址，使用前应修改；该快照不会随本机运行自动更新。恢复方法见 [快照说明](migration-snapshot/README.md)。
+
+主要配置字段：
+
+| 字段 | 含义 |
+| --- | --- |
+| `site.base_url` / `backup_urls` | 主站及备用根地址 |
+| `site.categories` | 栏目名称、站点路径、媒体库目录、别名和启用状态 |
+| `site.request_interval` / `timeout` | 请求间隔和网络超时 |
+| `download.root` | 媒体根目录 |
+| `download.retries` / `episode_timeout` | 剧集重试次数和下载超时 |
+| `download.minimum_duration` | 最短有效视频时长，默认 3 秒 |
+| `download.recheck_days` | 已完结专辑复查间隔 |
+| `download.failure_cooldown_hours` | 失败记录冷却时间 |
+| `download.segment_workers` | 分段并发数，当前允许 1 或 2，默认 1 |
+| `download.min_free_gib` | 磁盘保留空间，默认 1 GiB |
+| `state.database` / `log.directory` | 状态数据库和日志路径 |
+| `network.enabled` / `proxy` | 代理开关和地址 |
+
+完整基础模板见 [config.example.json](config.example.json)。其中 `/media`、`/data`、`/logs` 是容器路径，Windows 源码运行时需修改。
+
+### Emby / Jellyfin 媒体结构
+
+```text
+media/
+└── 栏目/
+    └── 专辑名 [huangguo-12345]/
+        ├── tvshow.nfo
+        ├── poster.jpg
+        └── Season 01/
+            ├── 专辑名.S01E01.mp4
+            └── 专辑名.S01E01.nfo
+```
+
+可将媒体目录添加为电视节目类型的媒体库，并按需启用读取本地 NFO。识别结果还取决于对应媒体服务器的设置。
+
+## 5. 迁移和打包
+
+### 迁移到其他电脑
+
+1. 停止服务，再复制完整便携目录。
+2. 需要保留视频时一起复制 `media`；只带程序和记录时，可在**副本**中清空 `media` 并保留空文件夹。
+3. 在新电脑检查代理、媒体路径和 8099 端口，启动后先核对队列。
+4. 下载与补下载时会按需创建栏目、专辑和季目录；历史文件缺失不会自动触发补下载。
+
+多个电脑的 `media` 可以按相同目录结构合并，遇到同名文件先核对，随后执行“扫描已有”并联网核对集数。数据库不会自动相互合并；选定一个数据库作为基础后，通过扫描补充文件记录，其他数据库中的队列、收藏和播放历史不会因此合并。
+
+### 手工打包现有便携目录
+
+停止服务后复制便携目录，按需保留副本的 `media`，再压缩整个副本。不要在原工作目录里删除视频。需要保留续传进度时，也应保留对应的 `.hgxz-resume-*` 隐藏目录。
+
+### 构建不含视频的便携包
+
+```powershell
+.\.venv\Scripts\python.exe portable-tools/build.py
+```
+
+当前构建脚本面向已有的 Windows 构建环境，需要 `.venv`、运行配置、数据库及 `.local` 中的 FFmpeg/ffprobe/Web 入口，并从 `C:/Program Files/Git/mingw64/bin` 收集 OpenSSL 和 DLL。缺少 Python 嵌入式运行时缓存时会从 Python 官网下载。
+
+输出为 `HGXZ-Portable/` 和 `HGXZ-Portable-Windows-x64.zip`。打包采用文件允许列表，包含运行时、配置和一致性数据库快照，将包内队列设为暂停；不包含媒体视频、续传分段和运行日志。若目标便携目录的 `media` 非空，脚本会拒绝构建，需先保管已有数据。
+
+便携启动时由 `prepare.py` 转换历史媒体路径。不同实体电脑之间的迁移仍需在目标电脑检查工具运行、路径及网络连通性。
+
+## 6. 命令行与 Docker
+
+**命令行全站同步和 daemon 不受“仅下载人工队列”的使用约定限制。** 普通 Windows 启动请使用 `run-local.ps1`；下面的命令适合明确需要批处理或定时全站同步的场景。
+
+```powershell
+# 单次扫描在线栏目并同步
+.\.venv\Scripts\python.exe -m HGXZ.cli --config config.json
+
+# 仅处理指定专辑
+.\.venv\Scripts\python.exe -m HGXZ.cli --config config.json --only-id 12345
+
+# 本地扫描注册文件（此 CLI 入口不执行 Web 页面中的在线总集数核对）
+.\.venv\Scripts\python.exe -m HGXZ.cli --config config.json --scan-existing
+
+# 常驻模式：启动后立即全站同步一次，之后每日定时执行，同时提供 WebUI
+.\.venv\Scripts\python.exe -m HGXZ.cli --config config.json --daemon --schedule 03:30
+```
+
+其他参数包括 `--metadata-only`、`--rebuild-covers`、`--max-albums`、`--max-episodes`、`--json` 和 `--port`，详见 `python -m HGXZ.cli --help`。
+
+仓库保留 [Dockerfile](Dockerfile) 和构建工作流。可自行构建镜像：
+
+```bash
+docker build -t huangguo-media-hub:local .
+docker run -d --name huangguo-media-hub \
+  -p 127.0.0.1:8099:8099 \
+  -v /absolute/path/config:/config \
+  -v /absolute/path/data:/data \
+  -v /absolute/path/logs:/logs \
+  -v /absolute/path/media:/media \
+  -e TZ=Asia/Shanghai -e SCHEDULE=03:30 \
+  huangguo-media-hub:local
+```
+
+先在宿主机 `config` 目录准备完整 `config.json`，使用模板中的容器路径。Docker 默认启用 daemon，启动即全站同步；其 Web 服务监听容器内 `0.0.0.0`，当前没有账号登录机制，请按实际需要限制端口访问。容器内 `127.0.0.1` 指向容器自身，宿主机代理需使用容器可访问的地址。
+
+工作流目标镜像为 `ghcr.io/yongyuan824/huangguo-media-hub:latest`，发布状态和可见性以 GitHub Actions / Packages 实际结果为准。仓库中的 `unraid/hgxz.xml` 是保留的上游模板，仍含上游镜像信息，使用前需自行调整。
+
+## 7. 常见问题
+
+| 问题 | 处理方法 |
+| --- | --- |
+| 没有自动下载新发现的专辑 | 普通 Web 模式需要人工加入队列，刷新目录只更新信息 |
+| 有完成记录却不能本地播放 | 检查文件是否真实存在；扫描核实后，按需手动补下载缺失集 |
+| 网页关闭后仍在下载 | 后台服务仍运行，使用停止任务或托盘停止服务 |
+| 关闭代理仍显示代理地址 | 区分“检测到的地址”和“当前主站请求方式”；已停用的地址会注明不生效 |
+| 测试站点成功但下载失败 | 视频 CDN 是另一条线路，继续测试视频线路并查看日志 |
+| 下载慢 | 对比直连/代理测试，检查网络和源站响应；分段并发可设为 2，但不保证提速 |
+| 启动提示端口被占用 | 确认其他源码版、便携版或后台服务已停止 |
+| 扫描后总集数与文件数不同 | 在线总集数和本地实际文件数分别统计；在线核对失败时不会以本地部分文件覆盖全集信息 |
+
+## 来源与使用范围
+
+项目从 HGXZ 扩展而来，本站点解析依赖其当前页面和接口格式，源站改版可能需要适配。请仅处理自己有权访问、保存和使用的内容。
