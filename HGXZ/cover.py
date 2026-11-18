@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from pathlib import Path
+from threading import Event
 import os
-import subprocess
 import tempfile
+
+from .cancel import check_cancelled, run_process
 
 # Values encoded by the site's public browser crypto worker.
 _MEDIA_KEY = bytes(int(x) for x in "102_53_100_57_54_53_100_102_55_53_51_51_54_50_55_48".split('_'))
@@ -33,18 +35,18 @@ def image_kind(data: bytes) -> str:
     return ''
 
 
-def decrypt_cover(ciphertext: bytes) -> bytes:
+def decrypt_cover(ciphertext: bytes, *, stop: Event | None = None) -> bytes:
     if not ciphertext or len(ciphertext) % 16:
         raise ValueError('encrypted cover is empty or not AES block aligned')
     with tempfile.TemporaryDirectory() as td:
         src = Path(td) / 'cipher.bin'
         dst = Path(td) / 'plain.bin'
         src.write_bytes(ciphertext)
-        proc = subprocess.run([
+        proc = run_process([
             'openssl', 'enc', '-d', '-aes-128-cbc', '-nopad',
             '-K', _MEDIA_KEY.hex(), '-iv', _MEDIA_IV.hex(),
             '-in', str(src), '-out', str(dst),
-        ], capture_output=True, text=True)
+        ], text=True, stop=stop, timeout=30)
         if proc.returncode:
             raise RuntimeError('cover AES decryption failed')
         plain = _strip_no_padding_fill(dst.read_bytes())
@@ -62,13 +64,14 @@ def write_decrypted_cover(ciphertext: bytes, destination: Path) -> str:
     return image_kind(plain)
 
 
-def write_cover(data: bytes, destination: Path) -> str:
+def write_cover(data: bytes, destination: Path, *, stop: Event | None = None) -> str:
     # Cover sources differ: the /api/media/covers payload is AES encrypted,
     # while the og:image fallback is usually a plain image.
     if image_kind(data):
         plain = data
     else:
-        plain = decrypt_cover(data)
+        plain = decrypt_cover(data, stop=stop)
+    check_cancelled(stop)
     destination.parent.mkdir(parents=True, exist_ok=True)
     partial = destination.with_suffix(destination.suffix + '.part')
     partial.write_bytes(plain)

@@ -118,6 +118,13 @@ header .container{display:flex;align-items:center;justify-content:space-between;
 .album-meta{display:flex;gap:10px;font-size:.76em;color:var(--text2);margin-top:5px;flex-wrap:wrap;
   align-items:center}
 .album-right{text-align:right;white-space:nowrap;min-width:96px}
+#album-list .album-item{grid-template-columns:16px 56px minmax(0,1fr) auto;min-height:102px}
+#album-list .album-select{display:grid;place-items:center}
+#album-list .album-select input{margin:0}
+#queue-list .album-item{grid-template-columns:minmax(0,1fr) auto;min-height:72px;cursor:default}
+#queue-list .detail-actions{margin-top:0;justify-content:flex-end}
+#album-list .album-right .detail-actions{margin-top:6px;justify-content:flex-end}
+#album-list .album-right .btn{padding-top:4px;padding-bottom:4px}
 .album-pct{font-size:.92em;font-weight:700;font-variant-numeric:tabular-nums}
 .progress{width:100%;height:6px;background:#0a0c11;border-radius:3px;overflow:hidden;margin-top:6px;
   display:flex}
@@ -197,6 +204,8 @@ header .container{display:flex;align-items:center;justify-content:space-between;
   .stat .value{font-size:1.4em}
   .album-item{grid-template-columns:44px minmax(0,1fr);gap:12px}
   .album-item .album-right{grid-column:1/-1;text-align:left;min-width:0}
+  #album-list .album-item{grid-template-columns:16px 44px minmax(0,1fr)}
+  #album-list .album-right .detail-actions{justify-content:flex-start}
   .cover{width:44px;height:60px}
   .detail-head{grid-template-columns:80px minmax(0,1fr);gap:14px}
   .detail-cover{width:80px}
@@ -207,6 +216,13 @@ header .container{display:flex;align-items:center;justify-content:space-between;
   .log-box{font-size:.72em}
   .log-line .ts{display:none}
 }
+#btn-stop[hidden],#album-pages[hidden]{display:none}
+ .work-status{display:flex;gap:8px 14px;align-items:center;flex-wrap:wrap;padding:10px 13px;
+   margin-top:10px;background:var(--card);border:1px solid var(--border);border-radius:var(--radius);font-size:.83em}
+ .work-status span{color:var(--text2);overflow-wrap:anywhere}
+ .work-status[data-failed="true"]{border-color:#7f4248}
+ #work-retry[hidden],#clear-selection[hidden]{display:none}
+ .queue-section{font-size:.82em;color:var(--text2);margin:8px 2px 0}
 </style>
 </head>
 <body>
@@ -218,15 +234,25 @@ header .container{display:flex;align-items:center;justify-content:space-between;
     </div>
     <div class="header-actions">
       <button class="btn btn-ghost" id="btn-scan">📂 扫描已有</button>
-      <button class="btn btn-primary" id="btn-sync">🔄 立即同步</button>
+      <button class="btn btn-primary" id="btn-sync">刷新专辑目录</button>
+      <button class="btn btn-danger" id="btn-stop" hidden disabled>停止同步</button>
     </div>
   </div>
 </header>
+<div class="container">
+  <div class="work-status" id="work-status" role="status" aria-live="polite">
+    <strong id="work-label">正在读取状态…</strong>
+    <span id="work-detail"></span>
+    <button type="button" class="btn btn-ghost btn-sm" id="work-retry" hidden>重新刷新目录</button>
+  </div>
+</div>
 
 <div class="container">
   <div class="tabs">
     <div class="tab active" data-page="dashboard">仪表盘</div>
     <div class="tab" data-page="albums">专辑列表</div>
+    <div class="tab" data-page="playback">本地播放</div>
+    <div class="tab" data-page="queue">同步队列</div>
     <div class="tab" data-page="logs">同步日志</div>
     <div class="tab" data-page="settings">运行参数</div>
   </div>
@@ -254,24 +280,59 @@ header .container{display:flex;align-items:center;justify-content:space-between;
   <!-- ================= Albums ================= -->
   <div class="page" id="page-albums">
     <div id="albums-toolbar">
+      <div class="detail-actions">
+        <button class="btn btn-ghost btn-sm" onclick="quickAlbums('new')">本次新增</button>
+        <button class="btn btn-ghost btn-sm" onclick="quickAlbums('updates')">有更新未下载</button>
+        <button class="btn btn-ghost btn-sm" onclick="quickAlbums('missing_files')">文件缺失</button>
+        <button class="btn btn-ghost btn-sm" onclick="quickAlbums('check_failed')">核对失败</button>
+        <button class="btn btn-ghost btn-sm" onclick="document.querySelector('[data-page=playback]').click()">已下载可播放</button>
+        <button class="btn btn-ghost btn-sm" onclick="quickAlbums('')">清除筛选</button>
+      </div>
+      <p class="sync-meta" id="catalog-summary" role="status"></p>
       <div class="filters">
         <div class="search-wrap">
           <input type="text" class="input" id="filter-search" placeholder="搜索剧名…">
         </div>
         <select class="select" id="filter-category"><option value="">全部分类</option></select>
-        <select class="select" id="filter-status">
+        <select class="select" id="filter-collection"><option value="">全部专题 / 排行 / 标签</option></select>
+        <button class="btn btn-ghost btn-sm" id="discover-collections">发现专题、排行和标签</button>
+        <button class="btn btn-ghost btn-sm" id="refresh-collection" disabled>刷新选中列表</button>
+        <span class="sync-meta" id="collection-info" role="status"></span>
+        <select class="select" id="album-sort"><option value="default">默认顺序</option><option value="score">评分从高到低</option><option value="updated">最近更新</option><option value="name">名称</option></select>
+<select class="select" id="album-preference"><option value="visible">正常显示</option><option value="favorite">收藏</option><option value="hidden">不感兴趣</option><option value="all">全部（含隐藏）</option></select>
+<select class="select" id="filter-status">
           <option value="">全部状态</option>
           <option value="done">已完成</option>
+          <option value="updates">有更新</option>
+          <option value="missing_files">文件缺失</option>
+          <option value="pending">待同步</option>
           <option value="downloading">下载中</option>
           <option value="failed">有失败</option>
         </select>
         <span class="spacer"></span>
+        <button class="btn btn-ghost btn-sm" id="select-page">勾选本页待同步</button>
+        <button class="btn btn-primary btn-sm" id="batch-queue" disabled>加入队列 (0)</button>
+        <button class="btn btn-ghost btn-sm" id="clear-selection" hidden>清空选择</button>
         <button class="btn btn-danger btn-sm" id="btn-retry-all">🔁 重试全部失败</button>
       </div>
       <div class="sync-meta" id="album-count" style="margin-bottom:10px"></div>
+        <span class="sync-meta" id="queue-count"></span>
     </div>
     <div id="album-list" class="album-list"></div>
+    <div class="detail-actions" id="album-pages">
+      <button class="btn btn-ghost btn-sm" id="page-prev">上一页</button>
+      <span class="sync-meta" id="page-counter"></span>
+      <button class="btn btn-ghost btn-sm" id="page-next">下一页</button>
+    </div>
     <div id="album-detail"></div>
+  </div>
+
+  <div class="page" id="page-queue">
+    <div class="filters">
+      <button class="btn btn-ghost" id="queue-toggle">暂停后续任务</button>
+      <span class="sync-meta" id="queue-summary"></span>
+    </div>
+    <div class="album-list" id="queue-list"></div>
   </div>
 
   <!-- ================= Logs ================= -->
@@ -297,14 +358,66 @@ header .container{display:flex;align-items:center;justify-content:space-between;
   </div>
 
   <!-- ================= Settings ================= -->
+  <div class="page" id="page-playback">
+<select class="select" id="play-sort"><option value="default">默认顺序</option><option value="score">评分从高到低</option><option value="updated">最近更新</option><option value="name">名称</option></select>
+<select class="select" id="play-preference"><option value="visible">正常显示</option><option value="favorite">收藏</option><option value="hidden">不感兴趣</option><option value="all">全部（含隐藏）</option></select>
+    <input class="input" id="play-search" placeholder="搜索已下载剧集" style="width:100%;margin-bottom:12px">
+    <video id="local-player" controls playsinline preload="metadata" style="width:100%;max-height:60vh;background:#000" hidden></video>
+    <p class="sync-meta" id="play-label" role="status"></p>
+    <label><input type="checkbox" id="auto-next"> 自动播放下一集</label>
+    <div class="detail-actions" id="episode-picker"></div>
+    <div class="album-list" id="play-library"></div>
+  </div>
   <div class="page" id="page-settings">
+    <div class="card"><div class="card-body">
+      <form id="proxy-form">
+        <label><input type="checkbox" id="proxy-enabled" checked> 使用代理</label>
+        <p class="sync-meta">关闭后直连，代理地址保留。切换后点击保存代理。</p>
+        <label for="proxy-address">HTTP / HTTPS 代理地址</label>
+        <input class="input" id="proxy-address" type="url" required placeholder="http://192.168.1.2:10809"
+          style="width:100%;margin:8px 0">
+        <p class="sync-meta">当前任务停止后可保存。保存立即生效，并在重启后保留。保存后可点击测试连接。</p>
+        <button class="btn btn-primary btn-sm" id="save-proxy" type="submit">保存代理</button>
+        <button type="button" class="btn btn-ghost btn-sm" id="test-video">测试视频线路</button>
+        <span class="sync-meta" id="video-test-result" role="status"></span>
+        <span class="sync-meta" id="proxy-result" role="status"></span>
+        <p id="proxy-live" class="sync-meta" role="status">正在读取代理状态…</p>
+      </form>
+    </div></div>
+    <div class="card"><div class="card-body">
+      <h3>在线站点栏目</h3>
+      <p class="sync-meta">启用的栏目会在刷新目录时扫描。填写站点栏目根路径；新栏目需采用现有剧集目录格式。</p>
+      <div id="category-editor"></div>
+      <div class="detail-actions">
+        <button class="btn btn-primary btn-sm" id="discover-categories">从网站发现栏目</button>
+        <button class="btn btn-ghost btn-sm" id="add-category">新增栏目</button>
+        <button class="btn btn-primary btn-sm" id="save-categories">保存栏目</button>
+        <span class="sync-meta" id="category-message" role="status"></span>
+      </div>
+    </div></div>
+    <div class="card"><div class="card-body">
+      <form id="sites-form">
+        <label for="site-primary">主站地址</label>
+        <input class="input" id="site-primary" type="url" required placeholder="https://example.com" style="width:100%;margin:8px 0 14px">
+        <label for="site-backups">备选地址，每行一个</label>
+        <textarea class="input" id="site-backups" rows="6" style="width:100%;display:block;margin:8px 0"></textarea>
+        <p class="sync-meta">填写站点根地址。主站连接失败时按顺序尝试备选地址；保存后立即生效。</p>
+        <button class="btn btn-primary btn-sm" id="save-sites" type="submit">保存地址</button>
+        <span id="sites-result" class="sync-meta" role="status"></span>
+      </form>
+    </div></div>
+
+    <div class="detail-actions">
+      <button class="btn btn-primary btn-sm" id="test-connection">测试连接</button>
+      <span class="sync-meta" id="connection-result" role="status"></span>
+    </div>
     <div class="card">
       <div class="card-head"><div class="card-title">⚙️ 运行参数（只读）</div></div>
       <div class="card-body"><dl class="kv" id="settings-kv"><dt>加载中…</dt></dl></div>
     </div>
     <div class="hint">
-      以上参数来自容器内 <code>/config/config.json</code> 与环境变量。修改后需重启容器生效。<br>
-      主站与视频 CDN 需经代理访问时，请在容器环境变量中设置 <code>HTTP_PROXY</code> / <code>HTTPS_PROXY</code>。
+      代理开关保存后立即生效。检测到的地址仅用于说明系统或环境配置，实际请求方式以当前状态为准。<br>
+      程序显示直连时，流量仍可能被本机代理工具的 TUN 模式接管。
     </div>
   </div>
 </div>
@@ -371,9 +484,12 @@ document.querySelectorAll('.tab').forEach(tab => {
     tab.classList.add('active');
     const page = tab.dataset.page;
     document.getElementById('page-' + page).classList.add('active');
-    if (page === 'albums') loadAlbums();
+    if (page === 'albums') { loadAlbums(); loadCollections(); }
+    if (page === 'queue') loadQueue();
     if (page === 'logs') { connectWS(); renderLogs(); }
     if (page === 'dashboard') loadDashboard();
+    if (page === 'playback') loadPlayback();
+    else { const video = document.getElementById('local-player'); video.pause(); }
     if (page === 'settings') loadSettings();
   });
 });
@@ -468,46 +584,262 @@ function jumpToAlbum(id){
   setTimeout(() => showDetail(id), 60);
 }
 
+let currentSync = null;
+let stopRequestJob = null;
+let observedJob = null;
+let networkSettings;
+function knownKind(sync){
+  return sync.kind || (observedJob && observedJob.id === sync.job_id ? observedJob.kind : null);
+}
+function noteJob(sync, kind){
+  if (sync?.job_id) observedJob = {id:sync.job_id, kind};
+  updateSync(sync);
+}
+function renderWork(sync){
+  const kind = knownKind(sync);
+  const task = kind === 'collection-discovery' ? '发现专题、排行和标签' :
+    kind === 'collection-refresh' ? '刷新所选列表' :
+    kind === 'catalog-refresh' ? '刷新专辑目录' :
+    kind === 'scan-existing' ? '扫描已有视频' : '同步';
+  const failed = ['partial_failure','error'].includes(sync.result);
+  const stalled = /ConnectError|ConnectTimeout|ReadTimeout|URLError|连接/i.test(sync.last_error || '');
+  let label = '就绪';
+  let extra = '';
+  if (sync.stopping) label = '正在停止…';
+  else if (sync.running) {
+    label = sync.active_album_id ? '正在下载专辑 #' + sync.active_album_id :
+      kind ? '正在' + task + '…' : '任务执行中…';
+    if (sync.active_album_id) extra = progressText(sync.progress);
+  } else if (failed) {
+    label = task + (sync.result === 'partial_failure' ? '部分失败' : '失败');
+    if (stalled) {
+      extra = '无法连接站点。' + (networkSettings === undefined ? '' :
+        networkSettings?.site_route?.route === 'proxy' ? '当前主站代理 ' + networkSettings.site_route.endpoint + '。' :
+        networkSettings ? (networkSettings.proxy_enabled === false ? '程序代理已停用，当前按直连请求。' : '当前主站按直连请求。') : '');
+      if (networkSettings === undefined) {
+        networkSettings = null;
+        api('/api/settings').then(settings => {
+          networkSettings = Object.hasOwn(settings,'proxy') ? settings : null;
+          if (currentSync) renderWork(currentSync);
+        }).catch(() => {});
+      }
+    } else extra = sync.last_error || (sync.failed_count ? sync.failed_count + ' 项失败，详见专辑详情或同步日志。' : '');
+  } else if (sync.queue_paused) label = '队列已暂停';
+  else if (sync.result === 'completed') label = task + '完成';
+  else if (sync.result === 'stopped') label = task + '已停止';
+  if (sync.queue?.length) extra += (extra ? ' · ' : '') + sync.queue.length + ' 部等待';
+  const hub = document.getElementById('work-status');
+  hub.dataset.failed = failed;
+  const title = document.getElementById('work-label');
+  const detail = document.getElementById('work-detail');
+  if (title.textContent !== label) title.textContent = label;
+  if (detail.textContent !== extra) detail.textContent = extra;
+  document.getElementById('work-retry').hidden = !(failed && kind === 'catalog-refresh');
+}
+document.getElementById('work-retry').addEventListener('click', () =>
+  document.getElementById('btn-sync').click());
+
+function renderProxyStatus(network={},route){
+  const box=document.getElementById('proxy-live');
+  if(!box)return;
+  const current=route || network;
+  const configured=current.route==='proxy' ? '代理：' + current.endpoint :
+    current.route==='direct' ? '直连' : '尚无网络请求记录';
+  const result={success:'最近请求成功',failed:'最近请求失败',cancelled:'最近请求已取消',requesting:'请求中'};
+  const activity=network.active_requests ? '正在请求（' + network.active_requests + '）' :
+    result[network.last_result] || '尚未发起请求';
+  box.textContent=configured + ' · ' + activity + (network.checked_at ? ' · ' + fmtTime(network.checked_at) : '');
+}
+let quickMode='';
+function quickAlbums(mode){
+  quickMode=['new','check_failed'].includes(mode) ? mode : '';
+  for(const id of ['filter-search','filter-category','filter-collection']) document.getElementById(id).value='';
+  document.getElementById('filter-status').value=['updates','missing_files'].includes(mode) ? mode : '';
+  albumPage=1;
+  loadAlbums();
+}
+function storeFilters(){
+  try {
+    sessionStorage.setItem('hgxz-filters',JSON.stringify({
+      page:albumPage,search:document.getElementById('filter-search').value,
+      category:document.getElementById('filter-category').value,
+      status:document.getElementById('filter-status').value,
+    }));
+  } catch(_){}
+}
 function updateSync(sync){
   if (!sync) return;
+  if (currentSync && currentSync.instance_id === sync.instance_id &&
+      sync.revision < currentSync.revision) return;
+  currentSync = sync;
+  if(sync.catalog_summary){
+    const r=sync.catalog_summary;
+    document.getElementById('catalog-summary').textContent =
+      '最近刷新：新增 ' + r.new_ids.length + ' 部 · 有更新 ' + r.updated_ids.length +
+      ' 部 · 核对失败 ' + r.failed_ids.length + ' 部 · ' + r.checked_at;
+  }
+  if (sync.network) renderProxyStatus(sync.network);
+  renderWork(sync);
+  const labels = {
+    idle: '就绪',
+    running: '同步中…',
+    completed: '同步完成',
+    partial_failure: '同步部分失败',
+    stopped: '同步已停止',
+    error: '同步失败',
+  };
   const dot = document.getElementById('sync-dot');
-  dot.className = 'dot ' + (sync.running ? 'running' : sync.last_error ? 'error' : 'idle');
+  const failed = sync.result === 'error' || sync.result === 'partial_failure';
+  dot.className = 'dot ' + (sync.running ? 'running' : failed ? 'error' : 'idle');
   document.getElementById('sync-text').textContent =
-    sync.running ? '同步中…' : sync.last_error ? '上次同步出错' : '就绪';
+    sync.stopping ? '正在停止…' : labels[sync.result] || labels.idle;
   const detail = document.getElementById('sync-detail');
-  detail.textContent = sync.last_error ? ('错误：' + sync.last_error).slice(0, 120) : '';
+  detail.textContent = sync.last_error ? ('错误：' + sync.last_error).slice(0, 120) :
+    sync.failed_count ? '失败项：' + sync.failed_count : '';
   document.getElementById('last-sync').textContent = '上次同步：' + (sync.last_sync || '-');
   document.getElementById('btn-sync').disabled = !!sync.running;
   document.getElementById('btn-scan').disabled = !!sync.running;
+  const queueCount = document.getElementById('queue-count');
+  if (queueCount) queueCount.textContent = '排队：' + (sync.queue || []).length + ' 部';
+  const stop = document.getElementById('btn-stop');
+  stop.textContent = sync.active_album_id ? '停止当前下载' :
+    knownKind(sync) === 'catalog-refresh' ? '停止刷新目录' : '停止当前任务';
+  stop.hidden = !sync.cancellable;
+  stop.disabled = !sync.cancellable || !!sync.stopping || stopRequestJob === sync.job_id;
 }
 
 /* ---------------- albums ---------------- */
 document.getElementById('filter-search').addEventListener('input', () => {
+  albumPage = 1;
   clearTimeout(debounceTimer); debounceTimer = setTimeout(loadAlbums, 280);
 });
-document.getElementById('filter-category').addEventListener('change', loadAlbums);
-document.getElementById('filter-status').addEventListener('change', loadAlbums);
+let collectionOptions = [];
+async function loadCollections(){
+  try {
+    collectionOptions = await api('/api/collections');
+    const select = document.getElementById('filter-collection');
+    const previous = select.value;
+    const kinds = {topic:'专题',rank:'排行',tag:'标签'};
+    select.innerHTML = '<option value="">全部专题 / 排行 / 标签</option>' +
+      Object.entries(kinds).map(([kind,label])=>`<optgroup label="${label}">${collectionOptions.filter(c=>c.kind===kind)
+        .map(c=>`<option value="${c.id}">${esc(c.name)} (${c.album_count})</option>`).join('')}</optgroup>`).join('');
+    select.value = previous;
+    collectionInfo();
+  } catch(e){toast(e.message,true);}
+}
+function collectionInfo(){
+  const select = document.getElementById('filter-collection');
+  const item = collectionOptions.find(c=>String(c.id)===select.value);
+  document.getElementById('refresh-collection').disabled = !item;
+  document.getElementById('collection-info').textContent = item ?
+    item.refreshed_at ? '本地快照 · ' + fmtTime(item.refreshed_at) : '尚未读取该列表，请刷新' : '';
+}
+document.getElementById('filter-collection').addEventListener('change',()=>{
+  collectionInfo(); resetAlbumPage();
+});
+document.getElementById('discover-collections').onclick=async()=>{
+  try { updateSync(await api('/api/collections/discover',{method:'POST'})); }
+  catch(e){toast(e.message,true);}
+};
+document.getElementById('refresh-collection').onclick=async()=>{
+  const id=document.getElementById('filter-collection').value;
+  if(!id)return;
+  try {updateSync(await api('/api/collections/'+id+'/refresh',{method:'POST'}));}
+  catch(e){toast(e.message,true);}
+};
+const ALBUM_PAGE_SIZE = 40;
+let albumPage = 1, albumPages = 1, listRequest = 0;
+let visibleAlbums = [];
+const selectedAlbums = new Set();
+function updateBatch(){
+  const button = document.getElementById('batch-queue');
+  button.textContent = '加入队列 (' + selectedAlbums.size + ')';
+  button.disabled = selectedAlbums.size === 0;
+  document.getElementById('clear-selection').hidden = selectedAlbums.size === 0;
+}
+document.getElementById('clear-selection').addEventListener('click', () => {
+  selectedAlbums.clear();
+  updateBatch();
+  loadAlbums();
+});
+function toggleAlbum(id, checked){
+  if (checked) selectedAlbums.add(id);
+  else selectedAlbums.delete(id);
+  updateBatch();
+}
+function resetAlbumPage(){ quickMode=""; albumPage = 1; loadAlbums(); }
+document.getElementById('filter-category').addEventListener('change', resetAlbumPage);
+document.getElementById('filter-status').addEventListener('change', resetAlbumPage);
+document.getElementById('page-prev').addEventListener('click', () => {
+  if (albumPage > 1) { albumPage--; loadAlbums(); }
+});
+document.getElementById('page-next').addEventListener('click', () => {
+  if (albumPage < albumPages) { albumPage++; loadAlbums(); }
+});
+document.getElementById('select-page').addEventListener('click', () => {
+  for (const a of visibleAlbums) {
+    if (!(a.episode_count > 0 && a.done_count >= a.episode_count)) selectedAlbums.add(a.id);
+  }
+  updateBatch();
+  loadAlbums();
+});
+document.getElementById('batch-queue').addEventListener('click', async () => {
+  const ids = [...selectedAlbums];
+  if (!ids.length) return;
+  try {
+    const state = await api('/api/sync/queue/batch', {
+      method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(ids),
+    });
+    updateSync(state);
+    for (const id of ids) selectedAlbums.delete(id);
+    updateBatch();
+    loadAlbums();
+  } catch(e) { toast(e.message,true); }
+});
 
 async function loadAlbums(){
   if (currentAlbumId !== null) return;
+  const request = ++listRequest;
   const params = new URLSearchParams();
   const cat = document.getElementById('filter-category').value;
   const status = document.getElementById('filter-status').value;
   const search = document.getElementById('filter-search').value.trim();
   if (cat) params.set('category', cat);
-  if (status) params.set('status', status);
+  const collection = document.getElementById('filter-collection').value;
+  if (collection) params.set('collection_id',collection);
+  if (status && status !== 'downloading') params.set('status', status);
   if (search) params.set('search', search);
 
   const list = document.getElementById('album-list');
   try {
-    const data = await api('/api/albums?' + params.toString());
+    const items = await api('/api/albums?' + params.toString());
+    if (request !== listRequest || currentAlbumId !== null) return;
+    const active = currentSync?.active_album_id;
+    const queue = currentSync?.queue || [];
+    let data = status === 'downloading' ? items.filter(a => a.id === active) : items;
+    if(quickMode){
+      const summary=currentSync?.catalog_summary;
+      const ids=summary ? (quickMode==='new' ? summary.new_ids : summary.failed_ids) : [];
+      data=data.filter(a=>ids.includes(a.id));
+    }
+    storeFilters();
+    data=data.filter(a=>preferenceMatch(a,document.getElementById('album-preference').value));
+    sortAlbums(data,document.getElementById('album-sort').value);
     albumCache = data;
+    albumPages = Math.max(1, Math.ceil(data.length / ALBUM_PAGE_SIZE));
+    albumPage = Math.min(albumPage, albumPages);
+    const offset = (albumPage - 1) * ALBUM_PAGE_SIZE;
+    visibleAlbums = data.slice(offset, offset + ALBUM_PAGE_SIZE);
+    document.getElementById('album-pages').hidden = !data.length;
+    document.getElementById('page-counter').textContent = albumPage + ' / ' + albumPages;
+    document.getElementById('page-prev').disabled = albumPage <= 1;
+    document.getElementById('page-next').disabled = albumPage >= albumPages;
     document.getElementById('album-count').textContent = `共 ${data.length} 部专辑`;
     if (!data.length) {
       list.innerHTML = '<div class="empty"><span class="big">🔍</span>没有符合条件的专辑</div>';
       return;
     }
-    list.innerHTML = data.map(a => {
+    list.innerHTML = visibleAlbums.map(a => {
       const total = a.episode_count || 0;
       const done = a.done_count || 0;
       const failed = a.failed_count || 0;
@@ -516,29 +848,47 @@ async function loadAlbums(){
       const doneW = shown ? Math.min(100, done / shown * 100) : 0;
       const badW = shown ? Math.min(100 - doneW, failed / shown * 100) : 0;
       const complete = total > 0 && done >= total;
-      let tag = '<span class="tag tag-ongoing">下载中</span>';
-      if (failed > 0) tag = '<span class="tag tag-failed">有失败</span>';
-      else if (complete && a.ended) tag = '<span class="tag tag-done">已完成</span>';
-      else if (complete) tag = '<span class="tag tag-done">已下全</span>';
+      const queued = queue.indexOf(a.id);
+      const state = a.id === active ? '同步中' : queued >= 0 ? '排队 #' + (queued + 1) :
+        complete ? '已下全' : failed ? '有失败' : '待同步';
+      const cls = a.id === active || queued >= 0 ? 'tag-ongoing' :
+        complete ? 'tag-done' : failed ? 'tag-failed' : 'tag-mute';
+      const tag = `<span class="tag ${cls}">${state}</span>`;
       return `
         <div class="album-item" onclick="showDetail(${a.id})">
-          <img class="cover" loading="lazy" src="/api/albums/${a.id}/poster" alt=""
-               onerror="this.outerHTML='&lt;div class=&quot;cover ph&quot;&gt;🍊&lt;/div&gt;'">
+          <div class="album-select">${!complete ? `<input type="checkbox" aria-label="选择专辑" onclick="event.stopPropagation()"
+            onchange="toggleAlbum(${a.id},this.checked)" ${selectedAlbums.has(a.id) ? 'checked' : ''}>` : ''}</div>
+          ${a.directory ? `<img class="cover" loading="lazy" src="/api/albums/${a.id}/poster" alt=""
+               onerror="this.outerHTML='&lt;div class=&quot;cover ph&quot;&gt;🍊&lt;/div&gt;'">` : '<div class="cover ph">🍊</div>'}
           <div class="album-main">
             <div class="album-title">${esc(a.title)}</div>
+            ${preferenceButtons(a)}
+            <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();previewAlbum(${a.id})">在线预览</button>
             <div class="album-meta">
               <span class="tag tag-mute">${esc(a.category)}</span>
-              <span>${done}/${total || shown} 集</span>
+              <span>${done}/${total || "未知"} 集</span>
               ${tag}
+              ${siteBadges(a)}
+              ${albumLabels(a)}
+              ${a.new_episode_count ? `<span class="tag tag-info">有更新 · ${a.new_episode_count} 集待下载</span>` : ''}
+              ${a.missing_file_count ? `<span class="tag tag-failed">文件缺失 ${a.missing_file_count} 集</span>` : ''}
               <span class="sync-meta">${esc(relTime(a.last_checked_at))}</span>
             </div>
           </div>
           <div class="album-right">
-            <div class="album-pct">${pct}%</div>
+            ${a.id === active ? `<div class="sync-meta">${progressText(currentSync.progress)}</div>` : ''}
+            <div class="album-pct">${total ? pct + "%" : "—"}</div>
             <div class="progress">
               <div class="ok" style="width:${doneW}%"></div>
               <div class="bad" style="width:${badW}%"></div>
             </div>
+            ${complete && a.directory ? `<div class="detail-actions" onclick="event.stopPropagation()">
+              <button class="btn btn-ghost btn-sm" onclick="copyAlbumPath(${a.id})">复制路径</button>
+            </div>` : ''}
+            ${!complete && a.id !== active ? `<div class="detail-actions" onclick="event.stopPropagation()">
+              <button class="btn btn-primary btn-sm" onclick="syncAlbum(${a.id},true)">优先同步</button>
+              ${queued < 0 ? `<button class="btn btn-ghost btn-sm" onclick="syncAlbum(${a.id},false)">加入队列</button>` : ''}
+            </div>` : ''}
           </div>
         </div>`;
     }).join('');
@@ -547,16 +897,153 @@ async function loadAlbums(){
   }
 }
 
+let listScrollY = 0;
+async function previewAlbum(id){
+  const popup = window.open('about:blank','_blank');
+  if (popup) popup.opener = null;
+  try {
+    const settings = await api('/api/settings');
+    const url = new URL('/video/' + Number(id) + '/',settings.base_url).href;
+    if (popup) popup.location.replace(url);
+    else toast('请允许弹出窗口以打开在线预览',true);
+  } catch(e) { if (popup) popup.close(); toast(e.message,true); }
+}
+let playbackItems = [];
+let playingAlbum = null;
+function albumEpisodes(id){
+  return playbackItems.filter(a=>a.id===id).sort((a,b)=>a.episode-b.episode);
+}
+function albumLabels(a){
+  const tags = [...new Set(a.tags || [])];
+  const sources = (a.collections || []).filter(c=>c.kind!=='tag');
+  return tags.slice(0,8).map(t=>`<span class="tag tag-mute">${esc(t)}</span>`).join('') +
+    sources.slice(0,4).map(c=>`<span class="tag tag-mute">${esc(c.name)}${c.kind==='rank' ? ' #' + Number(c.position) : ''}</span>`).join('');
+}
+function sortAlbums(items,mode){
+  if(mode==='score')items.sort((a,b)=>(b.site_score ?? -1)-(a.site_score ?? -1));
+  if(mode==='updated')items.sort((a,b)=>(b.last_changed_at || '').localeCompare(a.last_changed_at || ''));
+  if(mode==='name')items.sort((a,b)=>a.title.localeCompare(b.title,'zh-CN'));
+  return items;
+}
+function preferenceMatch(item,mode){
+  return mode==='all' || (mode==='hidden' ? item.hidden : mode==='favorite' ? item.favorite && !item.hidden : !item.hidden);
+}
+function preferenceButtons(a){
+  return `<div class="detail-actions" onclick="event.stopPropagation()">
+    <button class="btn btn-ghost btn-sm" onclick="setPreference(${a.id},'favorite',${!a.favorite})">${a.favorite ? '取消收藏' : '收藏'}</button>
+    <button class="btn btn-ghost btn-sm" onclick="setPreference(${a.id},'hidden',${!a.hidden})">${a.hidden ? '恢复显示' : '不感兴趣'}</button></div>`;
+}
+async function setPreference(id,key,value){
+  try {
+    const prefs=await api('/api/albums/'+id+'/preferences',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({[key]:value})});
+    for(const a of playbackItems)if(a.id===id)Object.assign(a,prefs);
+    renderPlayback();
+    if(currentAlbumId===null)loadAlbums();
+  }catch(e){toast(e.message,true);}
+}
+document.getElementById('album-sort').onchange=resetAlbumPage;
+document.getElementById('album-preference').onchange=resetAlbumPage;
+document.getElementById('play-sort').onchange=renderPlayback;
+document.getElementById('play-preference').onchange=renderPlayback;
+function siteBadges(a){
+  return (a.site_score != null ? `<span class="tag tag-info">站点评分 ${esc(a.site_score)}</span>` : '') +
+    (a.site_badge ? `<span class="tag tag-purple">${esc(a.site_badge)}</span>` : '') +
+    (a.hot_rank ? `<span class="tag tag-info">热播 #${Number(a.hot_rank)}</span>` : '');
+}
+function renderPlayback(){
+  const text = document.getElementById('play-search').value.trim().toLowerCase();
+  const grouped = new Map();
+  for (const item of playbackItems) {
+    if (!preferenceMatch(item,document.getElementById('play-preference').value)) continue;
+    if (![item.title,item.category,...(item.tags || [])].join(' ').toLowerCase().includes(text)) continue;
+    if (!grouped.has(item.id)) grouped.set(item.id,{...item,count:0});
+    grouped.get(item.id).count++;
+  }
+  document.getElementById('play-library').innerHTML = grouped.size ? sortAlbums([...grouped.values()],document.getElementById('play-sort').value).map(a =>
+    `<div class="album-item">
+      ${a.poster_available ? `<img class="cover" loading="lazy" src="/api/albums/${a.id}/poster" alt=""
+        onerror="this.hidden=true">` : '<div class="cover ph">暂无封面</div>'}
+      <div class="album-main"><div class="album-title">${esc(a.title)}</div>
+      ${preferenceButtons(a)}
+      <div class="album-meta">${siteBadges(a)}<span class="tag tag-mute">${esc(a.category || '未分类')}</span>
+      <span>本地可播 ${a.count} / ${a.episode_count || '未知'} 集</span></div>
+      <div class="album-meta">${albumLabels(a)}</div></div>
+      <button class="btn btn-primary btn-sm" onclick="continueAlbum(${a.id})">继续播放 / 选集</button>
+    </div>`).join('') : '<div class="empty">没有可播放的本地文件</div>';
+}
+function renderEpisodePicker(id,selected){
+  document.getElementById('episode-picker').innerHTML = albumEpisodes(id).map(a=>
+    `<button class="btn ${a.episode===selected ? 'btn-primary' : 'btn-ghost'} btn-sm"
+      onclick="playLocal(${id},${a.episode})" aria-pressed="${a.episode===selected}">第 ${a.episode} 集</button>`).join('');
+}
+async function loadPlayback(){
+  try { playbackItems = await api('/api/playback/library'); renderPlayback(); }
+  catch(e) { toast(e.message,true); }
+}
+let playingEpisode=null,lastPositionSave=0;
+function savePlayback(){
+  const player=document.getElementById('local-player');
+  if(!playingAlbum || !playingEpisode || !Number.isFinite(player.currentTime) || player.readyState===0)return;
+  const item=playbackItems.find(a=>a.id===playingAlbum && a.episode===playingEpisode);
+  if(item){item.resume_seconds=player.ended ? 0 : player.currentTime;item.watched_at=new Date().toISOString();}
+  fetch('/api/playback/progress',{method:'POST',headers:{'Content-Type':'application/json'},keepalive:true,
+    body:JSON.stringify({album_id:playingAlbum,episode:playingEpisode,seconds:player.ended ? 0 : player.currentTime})}).catch(()=>{});
+}
+function continueAlbum(id){
+  const items=albumEpisodes(id);
+  const latest=[...items].sort((a,b)=>(b.watched_at || '').localeCompare(a.watched_at || ''))[0];
+  if(latest)playLocal(id,latest.episode);
+}
+const playbackVideo=document.getElementById('local-player');
+playbackVideo.addEventListener('pause',savePlayback);
+playbackVideo.addEventListener('timeupdate',()=>{
+  if(Date.now()-lastPositionSave>5000){lastPositionSave=Date.now();savePlayback();}
+});
+window.addEventListener('pagehide',savePlayback);
+playbackVideo.addEventListener('ended',()=>{
+  savePlayback();
+  if(document.getElementById('auto-next').checked){
+    const next=albumEpisodes(playingAlbum).find(a=>a.episode>playingEpisode);
+    if(next)playLocal(playingAlbum,next.episode);
+  }
+});
+function playLocal(id,episode){
+  const item = playbackItems.find(a=>a.id===id && a.episode===episode);
+  if (!item) return;
+  savePlayback();
+  playingAlbum = id;
+  playingEpisode = episode;
+  renderEpisodePicker(id,episode);
+  const player = document.getElementById('local-player');
+  player.hidden = false;
+  player.src = '/api/playback/local/' + id + '/' + episode;
+  player.onloadedmetadata=()=>{
+    if(playingAlbum!==id || playingEpisode!==episode)return;
+    if(item.resume_seconds>0 && item.resume_seconds<player.duration-2)player.currentTime=item.resume_seconds;
+    player.play().catch(()=>{});
+  };
+  document.getElementById('play-label').textContent = (item?.title || '') + ' · 第 ' + episode + ' 集';
+  player.play().catch(()=>{});
+  player.scrollIntoView({block:'start',behavior:'smooth'});
+}
+document.getElementById('play-search').addEventListener('input',renderPlayback);
+document.getElementById('local-player').addEventListener('error',()=>{
+  document.getElementById('play-label').textContent = '无法播放此文件，请确认文件仍在并且浏览器支持其音视频编码。';
+});
 async function showDetail(albumId){
+  const fromList = currentAlbumId === null;
+  if (fromList) listScrollY = window.scrollY;
   currentAlbumId = albumId;
   document.getElementById('albums-toolbar').style.display = 'none';
   document.getElementById('album-list').style.display = 'none';
+  document.getElementById('album-pages').style.display = 'none';
   const box = document.getElementById('album-detail');
   box.style.display = 'block';
   box.innerHTML = '<div class="empty"><span class="spinner"></span> 加载中…</div>';
 
   try {
     const a = await api('/api/albums/' + albumId);
+    if (currentAlbumId !== albumId) return;
     const episodes = a.episodes || [];
     const total = Math.max(a.episode_count || 0, episodes.length);
     const done = a.done_count || 0;
@@ -573,12 +1060,17 @@ async function showDetail(albumId){
       const e = epMap[i];
       const status = e ? e.status : 'missing';
       const cls = status === 'done' ? 'tag-done' : status === 'failed' ? 'tag-failed' : 'tag-ongoing';
-      const label = status === 'done' ? '已下载' : status === 'failed' ? '失败' : '等待';
+      const label = e?.file_missing ? '文件缺失' : status === 'done' ? '已下载' : status === 'failed' ? '失败' : '等待';
       epHtml += `<div class="ep">
         <span class="ep-num">第 ${i} 集</span>
         <span style="display:flex;gap:8px;align-items:center;min-width:0">
           <span class="ep-time">${esc(relTime(e && e.updated_at))}</span>
           <span class="tag ${cls}">${label}</span>
+          ${e?.file_missing ? `<input type="checkbox" class="missing-select" value="${i}" aria-label="补下载第 ${i} 集"> <button class="btn btn-ghost btn-sm" onclick="downloadMissing(${a.id},${i})">补下载本集</button>` : ''}
+          ${status === 'failed' ? `<button class="btn btn-ghost btn-sm" onclick="retryEpisode(${a.id},${i})">重试本集</button>` : ''}
+        </span>
+        ${e?.last_error ? `<span class="sync-meta">${esc(e.last_error)}</span>` : ''}
+        <span hidden>
         </span>
       </div>`;
     }
@@ -605,10 +1097,13 @@ async function showDetail(albumId){
               </div>
               <dl class="kv">
                 <dt>专辑 ID</dt><dd>huangguo-${a.id}</dd>
+                <dt>文件缺失</dt><dd>${a.missing_file_count || 0} 集 · 需手动补下载</dd>
                 <dt>已下载容量</dt><dd>${fmtBytes(a.downloaded_bytes)}</dd>
                 <dt>最近下载</dt><dd>${esc(fmtTime(a.last_done_at))}</dd>
                 <dt>待下载 / 失败</dt><dd>${missing} 集 / ${failed} 集</dd>
-                <dt>存储路径</dt><dd>${esc(a.directory || '-')}</dd>
+                <dt>存储路径</dt><dd style="overflow-wrap:anywhere">${esc(a.storage_path || a.directory || '-')}
+                  ${a.directory ? `<button class="btn btn-ghost btn-sm" onclick="copyAlbumPath(${a.id})">复制路径</button>` : ''}
+                </dd>
               </dl>
               <div class="detail-actions">
                 <button class="btn btn-primary btn-sm" onclick="syncAlbum(${a.id})">🔄 同步此专辑</button>
@@ -618,38 +1113,76 @@ async function showDetail(albumId){
           </div>
         </div>
       </div>
+      ${a.missing_file_count ? `<div class="detail-actions">
+        <button class="btn btn-ghost btn-sm" onclick="document.querySelectorAll('.missing-select').forEach(e=>e.checked=true)">选择全部缺失集</button>
+        <button class="btn btn-primary btn-sm" onclick="missingBatch(${a.id})">补下载勾选的缺失集</button></div>` : ''}
+      <details><summary>专辑操作历史</summary><div id="album-history">正在读取…</div></details>
       <div class="section-title">剧集明细（${total} 集）</div>
       <div class="card"><div class="card-body"><div class="ep-grid">${epHtml}</div></div></div>
     `;
+    api('/api/albums/'+albumId+'/history').then(rows=>{
+      if(currentAlbumId!==albumId)return;
+      document.getElementById('album-history').innerHTML=rows.length ?
+        rows.map(r=>`<p class="sync-meta">${esc(fmtTime(r.created_at))} · ${esc(r.action)} · ${esc(r.detail)}</p>`).join('') :
+        '<p class="sync-meta">暂无操作历史</p>';
+    }).catch(()=>{if(currentAlbumId===albumId)document.getElementById('album-history').textContent='历史读取失败';});
   } catch(e) {
     box.innerHTML = `<div class="empty">加载失败：${esc(e.message)}</div>`;
   }
 }
 
-function backToList(){
+async function backToList(){
   currentAlbumId = null;
   document.getElementById('album-detail').style.display = 'none';
   document.getElementById('album-detail').innerHTML = '';
   document.getElementById('album-list').style.display = '';
+  document.getElementById('album-pages').style.display = '';
   document.getElementById('albums-toolbar').style.display = '';
-  loadAlbums();
+  await loadAlbums();
+  requestAnimationFrame(() => { if (currentAlbumId === null) window.scrollTo(0,listScrollY); });
 }
 
 /* ---------------- actions ---------------- */
-document.getElementById('btn-sync').addEventListener('click', async () => {
-  if (!confirm('确定立即开始全量同步？将遍历所有分类并下载新增剧集。')) return;
+async function copyAlbumPath(id){
   try {
-    const r = await api('/api/sync', {method: 'POST'});
-    toast('同步已开始' + (r.album_id ? '（专辑 ' + r.album_id + '）' : ''));
-    updateSync({running: true, last_sync: null, last_error: null});
-  } catch(e) { toast('启动失败：' + e.message, true); }
+    const a = await api('/api/albums/' + id);
+    const path = a.storage_path || a.directory;
+    if (!path) { toast('没有可用的存储路径',true); return; }
+    if (!navigator.clipboard) { window.prompt('复制此存储路径',path); return; }
+    try { await navigator.clipboard.writeText(path); }
+    catch (_) { window.prompt('复制此存储路径',path); return; }
+    toast('存储路径已复制');
+  } catch(e) { toast(e.message,true); }
+}
+document.getElementById('btn-sync').addEventListener('click', async () => {
+  try {
+    noteJob(await api('/api/catalog/refresh', {method: 'POST'}),'catalog-refresh');
+    toast('正在刷新目录');
+    document.querySelector('.tab[data-page="albums"]').click();
+  } catch(e) { toast(e.message, true); }
+});
+document.getElementById('btn-stop').addEventListener('click', async () => {
+  const jobId = currentSync && currentSync.job_id;
+  if (!jobId || !currentSync.cancellable || currentSync.stopping || stopRequestJob === jobId) return;
+  stopRequestJob = jobId;
+  updateSync(currentSync);
+  try {
+    const path = '/api/sync/stop?job_id=' + encodeURIComponent(jobId);
+    updateSync(await api(path, {method: 'POST'}));
+  } catch(e) {
+    toast('停止失败：' + e.message, true);
+    try { updateSync(await api('/api/sync-status')); } catch (_) {}
+  } finally {
+    if (stopRequestJob === jobId) stopRequestJob = null;
+    updateSync(currentSync);
+  }
 });
 document.getElementById('btn-scan').addEventListener('click', async () => {
-  if (!confirm('扫描媒体目录，将已有视频注册进状态库（不会重复下载）？')) return;
+  if (!confirm('扫描本地视频并逐部联网核对总集数？不会启动视频下载，核对失败时保留原总集数。')) return;
   try {
-    await api('/api/scan-existing', {method: 'POST'});
+    const r = await api('/api/scan-existing', {method: 'POST'});
     toast('扫描已开始，可在日志页查看进度');
-    updateSync({running: true, last_sync: null, last_error: null});
+    noteJob(r.sync,'scan-existing');
   } catch(e) { toast('启动失败：' + e.message, true); }
 });
 document.getElementById('btn-retry-all').addEventListener('click', async () => {
@@ -660,13 +1193,84 @@ document.getElementById('btn-retry-all').addEventListener('click', async () => {
     loadAlbums();
   } catch(e) { toast('操作失败：' + e.message, true); }
 });
-async function syncAlbum(id){
+async function syncAlbum(id, priority=true){
   try {
-    await api('/api/sync?album_id=' + id, {method: 'POST'});
-    toast('该专辑同步已开始');
-    updateSync({running: true, last_sync: null, last_error: null});
-  } catch(e) { toast('启动失败：' + e.message, true); }
+    const next = await api('/api/sync/queue?album_id=' + id + '&priority=' + priority, {method: 'POST'});
+    updateSync(next);
+    toast(next.active_album_id === id ? '已开始同步' : '已加入队列');
+    if (currentAlbumId === null) loadAlbums();
+  } catch(e) { toast(e.message, true); }
 }
+async function missingBatch(id){
+  const episodes=[...document.querySelectorAll('.missing-select:checked')].map(e=>Number(e.value));
+  if(!episodes.length){toast('请勾选缺失集',true);return;}
+  if(!confirm('确认补下载 ' + episodes.length + ' 集？'))return;
+  try{
+    updateSync(await api('/api/sync/download-missing-batch?album_id='+id,{
+      method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(episodes)}));
+    toast('所选缺失集已入队');
+  }catch(e){toast(e.message,true);}
+}
+async function downloadMissing(id, episode){
+  if (!confirm('确认重新下载第 ' + episode + ' 集的缺失文件？')) return;
+  try {
+    updateSync(await api('/api/sync/download-missing?album_id=' + id + '&episode=' + episode, {method:'POST'}));
+    toast('已安排补下载');
+  } catch(e) { toast(e.message,true); }
+}
+async function retryEpisode(id, episode){
+  try {
+    updateSync(await api('/api/sync/retry-episode?album_id=' + id + '&episode=' + episode, {method:'POST'}));
+    toast('已安排重试第 ' + episode + ' 集');
+  } catch(e) { toast(e.message,true); }
+}
+function progressText(p={}){
+  if (!p.phase) return '等待开始';
+  const episode = p.episode ? '第 ' + p.episode + ' / ' + p.total + ' 集 · ' : '';
+  if (p.phase === 'merging') return episode + '正在合并';
+  if (p.phase !== 'downloading') return episode + '正在获取播放清单';
+  return episode + '分段 ' + p.segments + '/' + p.segments_total + ' · 平均 ' +
+    fmtBytes(p.bytes_per_second || 0) + '/s' + (p.resumed_segments ? ' · 已复用 ' + p.resumed_segments + ' 段' : '');
+}
+async function loadQueue(){
+  try {
+    const s = await api('/api/sync/queue');
+    updateSync(s);
+    const toggle = document.getElementById('queue-toggle');
+    toggle.textContent = s.queue_paused ? '继续队列' : '暂停后续任务';
+    toggle.title = '暂停后续任务时，当前专辑会继续下载';
+    document.getElementById('queue-summary').textContent =
+      (s.queue_paused ? '已暂停 · ' : '') + s.queue.length + ' 部等待';
+    const rows = s.items || [];
+    function renderQueueRow(a) {
+      const active = a.id === s.active_album_id;
+      const target = a.episodes ? ' · 重试第 ' + a.episodes.join('、') + ' 集' : '';
+      const label = active ? progressText(s.progress) : '排队 #' + (s.queue.indexOf(a.id) + 1);
+      return `<div class="album-item"><div class="album-main">
+        <div class="album-title">${esc(a.title)}</div>
+        <div class="sync-meta">${esc(label + target)}</div>
+        </div>${active ? '' : `<div class="detail-actions">
+          <button class="btn btn-ghost btn-sm" onclick="queueControl('top',${a.id})">置顶</button>
+          <button class="btn btn-danger btn-sm" onclick="queueControl('remove',${a.id})">移除</button>
+        </div>`}</div>`;
+    }
+    const active = rows.find(a => a.id === s.active_album_id);
+    const pending = rows.filter(a => a.id !== s.active_album_id);
+    document.getElementById('queue-list').innerHTML =
+      (active ? '<h3 class="queue-section">正在下载</h3>' + renderQueueRow(active) : '') +
+      (pending.length ? '<h3 class="queue-section">等待中</h3>' + pending.map(renderQueueRow).join('') : '') ||
+      '<div class="empty">队列为空</div>';
+  } catch(e) { toast(e.message,true); }
+}
+async function queueControl(action, id){
+  try {
+    const suffix = id ? '&album_id=' + id : '';
+    updateSync(await api('/api/sync/queue/control?action=' + action + suffix, {method:'POST'}));
+    await loadQueue();
+  } catch(e) { toast(e.message,true); }
+}
+document.getElementById('queue-toggle').addEventListener('click', () =>
+  queueControl(currentSync?.queue_paused ? 'resume' : 'pause'));
 async function retryAlbum(id){
   try {
     const r = await api('/api/retry-failed?album_id=' + id, {method: 'POST'});
@@ -743,11 +1347,148 @@ document.getElementById('btn-clear-log').addEventListener('click', () => {
 });
 
 /* ---------------- settings ---------------- */
+document.getElementById('test-video').addEventListener('click',async event=>{
+  const button=event.currentTarget;
+  const label=document.getElementById('video-test-result');
+  button.disabled=true;
+  label.textContent='正在测试取址、清单和视频样本…';
+  try{
+    const r=await api('/api/settings/test-video',{method:'POST'});
+    const route=r.route==='proxy' ? '代理 ' + r.proxy : '直连';
+    label.textContent=(r.title || r.album_id) + ' · 第 ' + (r.episode || 1) + ' 集 · ' +
+      route + ' · ' + r.seconds + ' 秒 · ' + (r.ok ?
+      '视频线路连通 · 样本 ' + fmtBytes(r.sample_bytes) + '，未保存' :
+      r.stage + '失败（' + r.error + '）');
+    try{sessionStorage.setItem('hgxz-video-test',label.textContent);}catch(_){}
+  }catch(e){label.textContent=e.message;}
+  finally{button.disabled=false;}
+});
+document.getElementById('test-connection').addEventListener('click', async event => {
+  const button = event.currentTarget;
+  const result = document.getElementById('connection-result');
+  button.disabled = true;
+  result.textContent = '正在测试代理和站点…';
+  try {
+    const info = await api('/api/settings/test-connection', {method:'POST'});
+    const proxy = {reachable:'代理可连通',failed:'代理不可达',not_configured:'未设置代理',bypassed:'站点绕过代理'};
+    const site = {ok:'站点目录可访问',connection_failed:'站点连接失败',unexpected_response:'站点返回的页面不是预期目录'};
+    result.textContent = (proxy[info.proxy_status] || info.proxy_status) + ' · ' +
+      (site[info.site_status] || info.site_status);
+  } catch(e) { result.textContent = e.message; }
+  finally { button.disabled = false; }
+});
+document.getElementById('sites-form').addEventListener('submit',async event => {
+  event.preventDefault();
+  const button = document.getElementById('save-sites');
+  const result = document.getElementById('sites-result');
+  button.disabled = true;
+  try {
+    const payload = {
+      base_url:document.getElementById('site-primary').value.trim(),
+      backup_urls:document.getElementById('site-backups').value.split(/\r?\n/).map(x=>x.trim()).filter(Boolean),
+    };
+    const saved = await api('/api/settings/sites',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    document.getElementById('site-primary').value = saved.base_url;
+    document.getElementById('site-backups').value = saved.backup_urls.join('\n');
+    result.textContent = '已保存，立即生效';
+    loadSettings();
+  } catch(e) { result.textContent = e.message; }
+  finally { button.disabled = false; }
+});
+let editableCategories = null;
+function categoryRow(c={}){
+  const row = document.createElement('div');
+  row.className = 'filters';
+  row.innerHTML = `<label><input type="checkbox" data-field="enabled" ${c.enabled !== false ? 'checked' : ''}> 启用</label>
+    <input class="input" data-field="name" placeholder="栏目名称" value="${esc(c.name || '')}">
+    <input class="input" data-field="path" placeholder="/栏目路径/" value="${esc(c.path || '')}">
+    <input class="input" data-field="aliases" placeholder="详情页分类别名，逗号分隔" value="${esc((c.aliases || []).join(','))}">
+    <button class="btn btn-ghost btn-sm" type="button">移除</button>`;
+  row.querySelector('button').onclick=()=>row.remove();
+  document.getElementById('category-editor').append(row);
+}
+document.getElementById('discover-categories').onclick=async event=>{
+  const button=event.currentTarget;
+  const message=document.getElementById('category-message');
+  button.disabled=true;
+  message.textContent='正在读取站点导航并核对可用栏目，请稍候…';
+  try {
+    const found=await api('/api/settings/categories/discover',{method:'POST'});
+    const paths=new Set([...document.querySelectorAll('#category-editor [data-field="path"]')].map(x=>x.value.trim().replace(/\/?$/,'/')));
+    let added=0;
+    for(const c of found.categories){
+      if(!paths.has(c.path)){ categoryRow(c); paths.add(c.path); added++; }
+    }
+    message.textContent='发现 ' + found.categories.length + ' 个可识别栏目，新增 ' + added + ' 个。勾选后保存。' +
+      (found.unrecognized ? '其他链接未识别为可抓取栏目。' : '');
+  } catch(e){message.textContent=e.message;}
+  finally{button.disabled=false;}
+};
+document.getElementById('add-category').onclick=()=>categoryRow();
+document.getElementById('save-categories').onclick=async event=>{
+  const button=event.currentTarget;
+  button.disabled=true;
+  const message=document.getElementById('category-message');
+  try {
+    const payload=[...document.querySelectorAll('#category-editor .filters')].map(row=>{
+      const val=key=>row.querySelector('[data-field="'+key+'"]');
+      return {name:val('name').value.trim(),path:val('path').value.trim(),
+        enabled:val('enabled').checked,aliases:val('aliases').value.split(/[,，]/).map(s=>s.trim()).filter(Boolean)};
+    });
+    const data=await api('/api/settings/categories',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    editableCategories=data.categories;
+    message.textContent='已保存，下次刷新目录使用所选栏目';
+  } catch(e){message.textContent=e.message;}
+  finally{button.disabled=false;}
+};
+let proxyInitialized=false;
+document.getElementById('proxy-form').addEventListener('submit',async event=>{
+  event.preventDefault();
+  const button=document.getElementById('save-proxy');
+  const result=document.getElementById('proxy-result');
+  button.disabled=true;
+  try {
+    const saved=await api('/api/settings/proxy',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({proxy:document.getElementById('proxy-address').value.trim(),enabled:document.getElementById('proxy-enabled').checked}),
+    });
+    document.getElementById('proxy-address').value=saved.proxy;
+    document.getElementById('proxy-enabled').checked=saved.enabled;
+    networkSettings=undefined;
+    result.textContent='已保存并生效，请测试连接';
+    await loadSettings();
+  } catch(e){result.textContent=e.message;}
+  finally{button.disabled=false;}
+});
 async function loadSettings(){
   const dl = document.getElementById('settings-kv');
   try {
     const s = await api('/api/settings');
+    renderProxyStatus(s.network,s.site_route);
+    if (!proxyInitialized && s.proxy_url !== undefined) {
+      document.getElementById('proxy-address').value=s.proxy_url;
+      document.getElementById('proxy-enabled').checked=s.proxy_enabled !== false;
+      proxyInitialized=true;
+    }
+
+    if (editableCategories === null && s.category_config) {
+      editableCategories = s.category_config;
+      for (const category of editableCategories) categoryRow(category);
+    }
+
+    if (!document.getElementById('site-primary').value) {
+      document.getElementById('site-primary').value = s.configured_base_url || s.base_url;
+      document.getElementById('site-backups').value = (s.backup_urls || s.base_urls.slice(1)).join('\n');
+    }
+
     const rows = [
+      ['程序代理', s.proxy_enabled === false ? '已停用（忽略系统和环境代理）' : '已启用'],
+      ['当前主站请求方式', s.site_route?.route === 'proxy' ? '代理：' + s.site_route.endpoint : '直连'],
+      ['检测到的 HTTPS 代理', (s.proxy || '未检测到') + (s.proxy_enabled === false && s.proxy ? '（已忽略，不生效）' : '')],
+      ['分段并发', s.segment_workers == null ? '—' : s.segment_workers + ' 个'],
+      ['空间保留阈值', s.min_free_bytes == null ? '—' : fmtBytes(s.min_free_bytes)],
+      ['媒体盘剩余', s.media_free_bytes == null ? '—' : fmtBytes(s.media_free_bytes)],
+      ['临时目录所在盘剩余', s.temp_free_bytes == null ? '—' : fmtBytes(s.temp_free_bytes)],
       ['主站地址', s.base_url],
       ['备用域名', (s.base_urls || []).slice(1).join('、') || '无'],
       ['媒体目录', s.media_root],
@@ -765,23 +1506,39 @@ async function loadSettings(){
 }
 
 /* ---------------- polling ---------------- */
-let wasRunning = false;
+let lastRefreshedJob = null;
 setInterval(async () => {
   try {
     const s = await api('/api/sync-status');
     updateSync(s);
-    // Refresh the visible list once a sync finishes so new episodes show up.
-    if (wasRunning && !s.running) {
+    const status = currentSync;
+    if (document.getElementById('page-queue').classList.contains('active')) loadQueue();
+    if (status.running && currentAlbumId === null &&
+        document.getElementById('page-albums').classList.contains('active')) loadAlbums();
+    if (status.job_id && !status.running && status.job_id !== lastRefreshedJob) {
+      lastRefreshedJob = status.job_id;
+      loadCollections();
       const onAlbums = document.getElementById('page-albums').classList.contains('active');
       const onDash = document.getElementById('page-dashboard').classList.contains('active');
-      if (onAlbums && currentAlbumId === null) loadAlbums();
+      if (onAlbums) {
+        if (currentAlbumId === null) loadAlbums();
+        else showDetail(currentAlbumId);
+      }
       if (onDash) loadDashboard();
     }
-    wasRunning = !!s.running;
   } catch(e) {}
 }, 5000);
 
 /* ---------------- init ---------------- */
+try{
+  const saved=JSON.parse(sessionStorage.getItem('hgxz-filters') || 'null');
+  if(saved){
+    document.getElementById('filter-search').value=saved.search || '';
+    document.getElementById('filter-status').value=saved.status || '';
+    albumPage=Math.max(1,Number(saved.page)||1);
+  }
+  document.getElementById('video-test-result').textContent=sessionStorage.getItem('hgxz-video-test') || '';
+}catch(_){}
 loadDashboard();
 connectWS();
 loadInitialLogs();

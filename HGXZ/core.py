@@ -46,14 +46,14 @@ def build_episode_filename(album_title: str, episode_number: int, suffix: str = 
     return f"{sanitize_filename(album_title)}.S01E{episode_number:02d}{suffix}"
 
 
-def parse_category_panel(source: str) -> tuple[list[int], int | None]:
+def parse_category_panel(source: str, *, titles: dict[int, str] | None = None) -> tuple[list[int], int | None]:
     """Extract album IDs and the declared total from the 'latest' channel panel.
 
     The attribute order inside the panel tag is not guaranteed, so the total is
     looked up within the matched tag rather than relying on a fixed order.
     Returns ``total=None`` when the page does not declare one.
     """
-    panel_start = re.search(r'<[^>]+data-channel-panel=["\']latest["\'][^>]*>', source, re.I)
+    panel_start = re.search(r'<[^>]+data-channel-panel=["\'](?:latest|drama)["\'][^>]*>', source, re.I)
     if not panel_start:
         return [], None
     tag_html = panel_start.group(0)
@@ -78,11 +78,22 @@ def parse_category_panel(source: str) -> tuple[list[int], int | None]:
     result: list[int] = []
     # The site switched its album detail path from /detail/<id>/ to /video/<id>/
     # (old URLs redirect), so both forms are accepted.
-    for raw in re.findall(r'href=["\']/(?:detail|video)/(\d+)/', panel, re.I):
-        album_id = int(raw)
+    for link in re.finditer(r'<a\b([^>]*\bhref=["\']/(?:detail|video)/(\d+)/[^>]*>)(.*?)</a\s*>',
+                            panel, re.I | re.S):
+        album_id = int(link.group(2))
         if album_id not in seen:
             seen.add(album_id)
             result.append(album_id)
+        if titles is not None and album_id not in titles:
+            for attrs, key in ((link.group(1), 'title'), (link.group(3), 'alt')):
+                label = re.search(r'\b' + key + r'=["\']([^"\']+)["\']', attrs, re.I)
+                if label and label.group(1).strip():
+                    titles[album_id] = unescape(label.group(1)).strip()
+                    break
+            if album_id not in titles:
+                text = unescape(re.sub(r'<[^>]*>', '', link.group(3))).strip()
+                if text and len(text) < 160:
+                    titles[album_id] = text
     return result, total
 
 

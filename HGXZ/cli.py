@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -12,12 +13,15 @@ import threading
 import time
 import re
 
+from .cancel import SyncCancelled, check_cancelled, wait_or_cancel
 from .core import (Episode, build_episode_filename, parse_category_panel,
                    parse_detail_html, sanitize_filename, write_episode_nfo,
                    write_tvshow_nfo)
-from .download import download_hls, probe_media, validate_media
+from .download import SpaceLowError, check_download_space, download_hls, probe_media, validate_media
 from .cover import valid_cover, write_cover
 from .site import HuangguoClient
+from .media_lock import MediaBusyError, media_lock
+from .network import configure_proxy
 from .state import StateDB
 
 LOG = logging.getLogger('HGXZ')
@@ -27,6 +31,7 @@ class Archiver:
     MAX_CATEGORY_PAGES = 100
 
     def __init__(self, config: dict):
+        configure_proxy(config)
         self.config = config
         site = config['site']
         self.client = HuangguoClient(
@@ -39,6 +44,10 @@ class Archiver:
         self.state = StateDB(Path(config['state']['database']))
         self.retries = int(config['download'].get('retries', 3))
         self.minimum_duration = float(config['download'].get('minimum_duration', 3))
+        self.min_free_bytes = int(float(config['download'].get('min_free_gib', 1)) * 2**30)
+        self.segment_workers = config['download'].get('segment_workers', 1)
+        if self.min_free_bytes < 0 or type(self.segment_workers) is not int or self.segment_workers not in (1, 2):
+            raise ValueError('Expected nonnegative min_free_gib and segment_workers of 1 or 2')
         self.recheck_days = float(config['download'].get('recheck_days', 7))
         self.failure_cooldown_hours = float(config['download'].get('failure_cooldown_hours', 24))
         self.episode_timeout = float(config['download'].get('episode_timeout', 1800))
@@ -46,17 +55,36 @@ class Archiver:
     def close(self):
         self.state.close()
 
-    def discover(self) -> list[tuple[int, dict]]:
+    def discover(self, *, stop: threading.Event | None = None, catalog: bool = False) -> list[tuple[int, dict]]:
         seen: set[int] = set()
         out: list[tuple[int, dict]] = []
         for category in self.config['site']['categories']:
+            if not category.get('enabled', True):
+                continue
             page = 1
             category_ids: list[int] = []
             known_total: int | None = None
+            page_template = re.escape(category['path'].rstrip('/') + '/{page}/')
+            pager_pattern = re.compile(
+                r'<[^>]+data-jump-tpl=["\']' + page_template + r'["\'][^>]*>'
+            )
+            last_page: int | None = None
             while page <= self.MAX_CATEGORY_PAGES:
                 path = category['path'] if page == 1 else category['path'].rstrip('/') + f'/{page}/'
-                html = self.client.get_text(path)
-                ids, page_total = parse_category_panel(html)
+                check_cancelled(stop)
+                html = self.client.get_text(path, stop=stop)
+                check_cancelled(stop)
+                titles = {} if catalog else None
+                ids, page_total = parse_category_panel(html, titles=titles)
+                if titles is not None:
+                    self.state.register_catalog(category['name'], ids, titles)
+                    self.state.update_catalog_scores(html, ids)
+                if last_page is None:
+                    pager = pager_pattern.search(html)
+                    if pager:
+                        pages = re.search(r'data-pages=["\'](\d+)["\']', pager.group())
+                        if pages:
+                            last_page = int(pages.group(1))
                 if page_total is not None:
                     known_total = page_total
                 fresh = [i for i in ids if i not in category_ids]
@@ -64,6 +92,8 @@ class Archiver:
                 if not fresh:
                     # Last page reached, or the site ignored our page number
                     # and re-served the same content; stop either way.
+                    break
+                if last_page is not None and page >= last_page:
                     break
                 if known_total is not None and len(category_ids) >= known_total:
                     break
@@ -77,6 +107,33 @@ class Archiver:
                     seen.add(album_id)
                     out.append((album_id, category))
         return out
+
+    def check_catalog_updates(self, stop=None) -> int:
+        with self.state._lock:
+            rows = self.state.conn.execute(
+                "SELECT * FROM albums WHERE last_checked_at IS NOT NULL AND episode_count>0").fetchall()
+        failures = 0
+        self.update_check_failed = []
+        for old in rows:
+            check_cancelled(stop)
+            try:
+                source = self.client.get_text(f"/video/{old['id']}/", stop=stop)
+                if not re.search(r'data-ep-id=["\']\d+', source):
+                    raise ValueError('Missing episode list')
+                album = parse_detail_html(old['id'], old['category'], source)
+                check_cancelled(stop)
+                self.state.update_online_total(old['id'], album.episode_count, album.ended)
+                self.state.update_site_metadata(old['id'], source)
+                self.state.add_history(old['id'],'在线核对',f'总集数 {album.episode_count}')
+                LOG.info('catalog checked album=%s episodes=%s previous=%s',
+                         old['id'], album.episode_count, old['episode_count'])
+            except SyncCancelled:
+                raise
+            except Exception as exc:
+                failures += 1
+                self.update_check_failed.append(old['id'])
+                LOG.warning('catalog update check failed album=%s reason=%s', old['id'], type(exc).__name__)
+        return failures
 
     def _album_dir(self, album, category: dict) -> Path:
         library = sanitize_filename(category['library'])
@@ -110,18 +167,21 @@ class Archiver:
             return False
         return age.total_seconds() < self.recheck_days * 86400
 
-    def _sync_cover(self, album, poster: Path) -> None:
+    def _sync_cover(self, album, poster: Path, stop: threading.Event | None = None) -> None:
         # Two independent sources: the API returns an AES-encrypted image,
         # the og:image fallback is usually plain. A failure in one must not
         # prevent trying the other.
         for source, url in (('api', None), ('og:image', album.cover_url)):
+            check_cancelled(stop)
             try:
                 if source == 'api':
-                    url = self.client.cover_url(album.id)
+                    url = self.client.cover_url(album.id, stop=stop)
                 if not url:
                     continue
-                write_cover(self.client.get_bytes(url), poster)
+                write_cover(self.client.get_bytes(url, stop=stop), poster, stop=stop)
                 return
+            except SyncCancelled:
+                raise
             except Exception as exc:
                 LOG.warning('album=%s cover via %s failed: %s',
                             album.id, source, exc)
@@ -154,12 +214,20 @@ class Archiver:
     def sync_album(self, album_id: int, category: dict, *,
                    metadata_only: bool = False,
                    max_episodes: int | None = None,
-                   force: bool = False) -> dict:
-        html = self.client.get_text(f'/video/{album_id}/')
+                   force: bool = False, stop: threading.Event | None = None,
+                   episodes: list[int] | None = None, progress: Callable[..., None] | None = None) -> dict:
+        check_cancelled(stop)
+        html = self.client.get_text(f'/video/{album_id}/', stop=stop)
+        check_cancelled(stop)
         album = parse_detail_html(album_id, category['name'], html)
-        cat_match = next((c for c in self.config['site']['categories'] if c['name'] == album.category), None)
+        cat_match = next(
+            (c for c in self.config['site']['categories']
+             if album.category == c['name'] or album.category in c.get('aliases', [])),
+            None,
+        )
         if cat_match:
             category = cat_match
+            album.category = category['name']
         elif album.category != category['name']:
             LOG.warning('skip album=%s expected=%s actual=%s',
                         album.id, category['name'], album.category)
@@ -170,19 +238,24 @@ class Archiver:
         self.state.upsert_album(album.id, album.category, album.title,
                                 album.episode_count, album.ended,
                                 str(album_dir))
+        self.state.update_site_metadata(album.id, html)
         season_dir = album_dir / 'Season 01'
         season_dir.mkdir(parents=True, exist_ok=True)
         write_tvshow_nfo(album_dir / 'tvshow.nfo', album)
         poster = album_dir / 'poster.jpg'
         if not valid_cover(poster):
-            self._sync_cover(album, poster)
+            self._sync_cover(album, poster, stop)
         limit = album.episode_count if max_episodes is None else min(album.episode_count, max_episodes)
         done = 0
         failed_episodes: list[int] = []
-        pending = [n for n in range(1, limit + 1) if not self.state.episode_done(album.id, n)]
+        numbers = range(1, limit + 1) if episodes is None else [n for n in episodes if 1 <= n <= limit]
+        if episodes is not None and len(numbers) != len(episodes):
+            raise ValueError('Requested episode is outside the current album range')
+        pending = [n for n in numbers if not self.state.episode_done(album.id, n)]
         if pending and not metadata_only:
             LOG.info('album=%s [%s] 开始同步: 待下载 %d/%d 集', album.id, album.title, len(pending), limit)
-        for number in range(1, limit + 1):
+        for number in numbers:
+            check_cancelled(stop)
             video = season_dir / build_episode_filename(album.title, number)
             ep = Episode(album.id, number, f'S01E{number:02d}', album.plot)
             if metadata_only:
@@ -197,6 +270,10 @@ class Archiver:
                     write_episode_nfo(recorded.with_suffix('.nfo'), album, ep)
                 done += 1
                 continue
+            recorded = self.state.episode_row(album.id, number)
+            if episodes is None and recorded and recorded['status'] == 'done':
+                LOG.info('album=%s ep=%s file missing; waiting for operator approval', album.id, number)
+                continue
             # A rename on the site must not trigger a re-download of episodes
             # that are already sitting in this folder under the old name.
             existing = self._find_episode_video(season_dir, number)
@@ -206,7 +283,7 @@ class Archiver:
                     existing = video
             if existing is not None:
                 try:
-                    info = probe_media(existing)
+                    info = probe_media(existing, stop=stop)
                     if validate_media(info, self.minimum_duration):
                         self.state.mark_episode(album.id, number, str(existing), 'done',
                                                 info.get('size', 0))
@@ -214,6 +291,8 @@ class Archiver:
                             write_episode_nfo(existing.with_suffix('.nfo'), album, ep)
                         done += 1
                         continue
+                except SyncCancelled:
+                    raise
                 except Exception:
                     pass
             if not force:
@@ -230,10 +309,17 @@ class Archiver:
             last = None
             succeeded = False
             for attempt in range(1, self.retries + 1):
+                check_cancelled(stop)
                 try:
-                    url = self.client.play_url(album.id, number)
+                    check_download_space(self.root, self.min_free_bytes)
+                    if progress:
+                        progress(phase='resolving', episode=number, total=album.episode_count,
+                                 segments=0, segments_total=0, bytes_per_second=0)
+                    url = self.client.play_url(album.id, number, stop=stop)
                     info = download_hls(url, video, self.client.base_url + '/',
-                                        self.minimum_duration, timeout=self.episode_timeout)
+                                        self.minimum_duration, timeout=self.episode_timeout, stop=stop,
+                                        progress=progress, workers=self.segment_workers,
+                                        min_free_bytes=self.min_free_bytes)
                     self.state.mark_episode(album.id, number, str(video), 'done',
                                             info.get('size', 0))
                     done += 1
@@ -242,7 +328,10 @@ class Archiver:
                     LOG.info('album=%s [%s] 第 %d/%d 集 下载完成 (时长 %.0f秒, 大小 %.1fMB)',
                              album.id, album.title, number, limit, info.get('duration', 0), size_mb)
                     break
+                except (SyncCancelled, SpaceLowError):
+                    raise
                 except Exception as exc:
+                    check_cancelled(stop)
                     last = exc
                     err_msg = str(exc).lower()
                     is_permanent = any(k in err_msg for k in (
@@ -256,16 +345,18 @@ class Archiver:
                                   album.id, number, exc)
                         break
                     if attempt < self.retries:
-                        time.sleep([5, 15, 30][min(attempt - 1, 2)])
+                        wait_or_cancel(stop, [5, 15, 30][min(attempt - 1, 2)])
             if not succeeded:
+                check_cancelled(stop)
                 # Recorded even for permanent failures so the cooldown applies,
                 # the WebUI shows the episode as failed, and later syncs do not
                 # keep hammering a withdrawn episode.
-                self.state.mark_episode(album.id, number, str(video), 'failed')
+                reason = re.sub(r'https?://\S+', '[URL]', str(last))[:300]
+                self.state.mark_episode(album.id, number, str(video), 'failed', last_error=reason)
                 failed_episodes.append(number)
                 LOG.error('album=%s ep=%s giving up after %s attempt(s): %s',
                           album.id, number, attempt, last)
-        if pending and done == limit and not metadata_only:
+        if pending and done == limit and episodes is None and not metadata_only:
             LOG.info('album=%s [%s] 全部 %d 集已下载完毕', album.id, album.title, limit)
         result = {'album': asdict(album), 'directory': str(album_dir),
                   'episodes_done': done, 'metadata_only': metadata_only}
@@ -276,31 +367,48 @@ class Archiver:
         return result
 
     def scan(self, *, metadata_only=False, only_id=None,
-             max_albums=None, max_episodes=None):
+             max_albums=None, max_episodes=None, stop: threading.Event | None = None,
+             episodes: list[int] | None = None, progress: Callable[..., None] | None = None):
+        check_cancelled(stop)
+        with media_lock(self.root):
+            return self._scan(metadata_only=metadata_only, only_id=only_id,
+                              max_albums=max_albums, max_episodes=max_episodes, stop=stop,
+                              episodes=episodes, progress=progress)
+
+    def _scan(self, *, metadata_only, only_id, max_albums, max_episodes, stop, episodes, progress):
+        check_cancelled(stop)
         force = bool(only_id)
         if only_id:
-            found = [(only_id, self.config['site']['categories'][0])]
+            row = self.state.album_row(only_id)
+            categories = self.config['site']['categories']
+            category = next((c for c in categories if row and c['name'] == row['category']), categories[0])
+            found = [(only_id, category)]
         else:
-            found = self.discover()
+            found = self.discover(stop=stop)
         if max_albums:
             found = found[:max_albums]
         results = []
         failures = 0
         skipped_complete = 0
         for album_id, category in found:
+            check_cancelled(stop)
             if not force and self._complete_and_fresh(album_id):
                 skipped_complete += 1
                 continue
             try:
                 result = self.sync_album(
                     album_id, category, metadata_only=metadata_only,
-                    max_episodes=max_episodes, force=force)
+                    max_episodes=max_episodes, force=force, stop=stop, episodes=episodes, progress=progress)
                 results.append(result)
                 if result.get('failed_episodes'):
                     failures += 1
+            except (SyncCancelled, SpaceLowError):
+                raise
             except Exception as exc:
+                check_cancelled(stop)
                 failures += 1
                 LOG.exception('sync album %s failed: %s', album_id, exc)
+        check_cancelled(stop)
         episodes_done = sum(r.get('episodes_done', 0) for r in results)
         LOG.info('sync finished synced=%d failures=%d skipped=%d episodes=%d',
                  len(results), failures, skipped_complete, episodes_done)
@@ -308,12 +416,13 @@ class Archiver:
 
 
 def load_config(path: Path) -> dict:
-    return json.loads(path.read_text(encoding='utf-8'))
+    config = json.loads(path.read_text(encoding='utf-8'))
+    config['_config_path'] = str(path.resolve())
+    return config
 
 
 def run_daemon(config: dict, schedule: str, web_port: int = 8099) -> int:
-    from .web.app import (create_app, mark_sync_finished, release_sync,
-                          set_shared_state, try_acquire_sync)
+    from .web.app import create_app, run_sync_job, set_shared_state, try_acquire_sync
     from .web.log_handler import LogBuffer
     import uvicorn
 
@@ -337,8 +446,6 @@ def run_daemon(config: dict, schedule: str, web_port: int = 8099) -> int:
     archiver_ref = [archiver]
     set_shared_state(archiver.state, log_buf, archiver_ref)
 
-    from .web.app import _sync_status
-
     try:
         hour, minute = (int(part) for part in schedule.split(':'))
     except ValueError:
@@ -349,17 +456,11 @@ def run_daemon(config: dict, schedule: str, web_port: int = 8099) -> int:
         while True:
             # Manual syncs (WebUI) and this loop must never run concurrently:
             # they would download the same episode into the same .part file.
-            if not try_acquire_sync():
+            job = try_acquire_sync()
+            if job is None:
                 LOG.warning('scheduled sync skipped: another sync is already running')
             else:
-                try:
-                    archiver.scan()
-                    mark_sync_finished()
-                except Exception as exc:
-                    _sync_status['last_error'] = str(exc)
-                    LOG.exception('sync failed')
-                finally:
-                    release_sync()
+                run_sync_job(job, lambda stop: archiver.scan(stop=stop)[1], 'scheduled-sync')
 
             now = datetime.now()
             target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
@@ -410,6 +511,7 @@ def main() -> int:
         except Exception as exc:
             logging.getLogger('HGXZ').warning('failed to set umask=%s: %s', umask_val, exc)
     config = load_config(Path(args.config))
+    configure_proxy(config)
 
     if args.daemon:
         return run_daemon(config, args.schedule, args.port)
@@ -418,9 +520,12 @@ def main() -> int:
         from .scanner import scan_existing
         state = StateDB(Path(config['state']['database']))
         try:
-            result = scan_existing(
-                Path(config['download']['root']), state,
-                float(config['download'].get('minimum_duration', 3)))
+            root = Path(config['download']['root'])
+            with media_lock(root):
+                result = scan_existing(root, state, float(config['download'].get('minimum_duration', 3)))
+        except (MediaBusyError, SpaceLowError) as exc:
+            LOG.error('%s', exc)
+            return 2
         finally:
             state.close()
         print(json.dumps(result, ensure_ascii=False, indent=2))
@@ -435,7 +540,13 @@ def main() -> int:
             int(site.get('timeout', 30)),
             backup_urls=site.get('backup_urls', []),
         )
-        result = rebuild(Path(config['download']['root']), client)
+        root = Path(config['download']['root'])
+        try:
+            with media_lock(root):
+                result = rebuild(root, client)
+        except (MediaBusyError, SpaceLowError) as exc:
+            LOG.error('%s', exc)
+            return 2
         print(json.dumps(result, ensure_ascii=False))
         return 0 if result['failed'] == 0 else 1
 
@@ -444,6 +555,9 @@ def main() -> int:
         results, failures = archiver.scan(
             metadata_only=args.metadata_only, only_id=args.only_id,
             max_albums=args.max_albums, max_episodes=args.max_episodes)
+    except (MediaBusyError, SpaceLowError) as exc:
+        LOG.error('%s', exc)
+        return 2
     finally:
         archiver.close()
     if args.json:

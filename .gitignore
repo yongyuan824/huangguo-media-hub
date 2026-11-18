@@ -10,3 +10,17 @@ __pycache__/
 config.json
 /data/
 /logs/
+.hgxz-sync.lock
+
+# Local runtime, media and portable build outputs
+/.venv/
+/media/
+/HGXZ-Portable/
+/HGXZ-Portable-Windows-x64.zip
+/portable-tools/python-embed.zip
+/.local/*
+!/.local/webui.py
+*.sqlite3-wal
+*.sqlite3-shm
+*.part
+.hgxz-resume-*/

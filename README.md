@@ -1,3 +1,37 @@
+# huangguo-media-hub
+
+基于 [HGXZ](https://github.com/jzf387897543/HGXZ) 扩展的本地媒体管理工具，保留上游提交历史。
+
+## 当前版本
+
+- 手动专辑下载队列、排序、暂停与停止、进度持久化和缺失文件手动补下载。
+- 专辑栏目、标签、专题与排行榜筛选，评分、收藏、隐藏和新增剧集提示。
+- 本地按专辑播放、剧集选择、播放进度记录及可选自动下一集。
+- 代理开关、请求方式显示、站点连接和视频线路抽样测试。
+- Windows 托盘启动与停止，以及便携包构建和迁移工具。
+
+网页关闭不会停止后台任务。在线预览目前打开原站页面。视频线路测试只读取少量数据，不保存整集。
+
+## Windows 源码运行
+
+需要 Python 3.12、FFmpeg（含 ffprobe）和 OpenSSL，可执行文件放入 `.local` 或 PATH。
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+Copy-Item config.example.json config.json
+```
+
+编辑 `config.json`，将 `download.root`、`state.database`、`log.directory` 分别改为 `./media`、`./data/state.sqlite3`、`./logs`，按需配置站点与代理。
+
+执行 `run-local.ps1`，或双击 `启动HGXZ.vbs` 使用托盘。浏览器打开 http://127.0.0.1:8099/ 。
+
+本仓库不包含本机配置、下载视频、状态数据库、运行时或便携包。`portable-tools/build.py` 用于已有 Windows 构建环境，依赖 `.local` 中的工具和本机数据；它不是全自动安装脚本。迁移时请另行保留数据库及所需媒体文件。
+
+以下是上游部署说明，其中旧镜像地址指向上游发布版本；本仓库工作流构建的镜像为 `ghcr.io/yongyuan824/huangguo-media-hub:latest`，是否可拉取取决于构建结果及包可见性设置。
+
+---
+
 # 🍊 HGXZ - 黄果下载
 
 自动下载黄果短剧视频到指定目录，带 WebUI 管理界面。
